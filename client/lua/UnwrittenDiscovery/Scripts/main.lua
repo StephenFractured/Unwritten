@@ -176,15 +176,54 @@ local function fixGhostAnimation(verbose)
     local playerAnimClass = pawn.Mesh:GetAnimInstance():GetClass()
     local cur = mesh:GetAnimInstance()
     if verbose then
+      pcall(function()
+        local pa = pawn.Mesh:GetAnimInstance()
+        log("player anim=%s AnimComp=%s layers=%s tickOpt=%s", className(pa),
+            valid(pa.AnimComp) and pa.AnimComp:GetFName():ToString() or "<none>",
+            valid(pawn.AnimationComponent.LayersAsset) and pawn.AnimationComponent.LayersAsset:GetFName():ToString() or "<none>",
+            tostring(pawn.Mesh.VisibilityBasedAnimTickOption))
+        local ga = ghost.Mesh:GetAnimInstance()
+        log("ghost  anim=%s AnimComp=%s layers=%s tickOpt=%s", valid(ga) and className(ga) or "<none>",
+            (valid(ga) and valid(ga.AnimComp)) and ga.AnimComp:GetFName():ToString() or "<none>",
+            valid(ghost.AnimationComponent.LayersAsset) and ghost.AnimationComponent.LayersAsset:GetFName():ToString() or "<none>",
+            tostring(ghost.Mesh.VisibilityBasedAnimTickOption))
+      end)
       log("ghost mesh=%s animMode=%s anim=%s", valid(mesh.SkeletalMesh) and mesh.SkeletalMesh:GetFName():ToString() or "<none>",
           tostring(mesh.AnimationMode), valid(cur) and className(cur) or "<none>")
     end
     if not valid(mesh.SkeletalMesh) then return end  -- look not loaded yet
     if not valid(cur) then
+      -- Round 5: copy the player's animation wiring before starting the blueprint.
+      -- Round 4 showed the blueprint runs but outputs a T-pose: its locomotion comes from
+      -- "animation layers" that the AnimationComponent plugs in, and the preview body has none.
+      pcall(function()
+        local srcAC, dstAC = pawn.AnimationComponent, ghost.AnimationComponent
+        local layers = srcAC.LayersAsset
+        log("  player layers=%s, ghost layers=%s", valid(layers) and layers:GetFName():ToString() or "<none>",
+            valid(dstAC.LayersAsset) and dstAC.LayersAsset:GetFName():ToString() or "<none>")
+        dstAC:SetAnimLayersAsset(layers)
+        log("  ghost layers set")
+      end)
+      -- Round 4 screenshot: the body hovers ~1 m up. Use the player's mesh offset in the capsule.
+      pcall(function()
+        local rl, rr = pawn.Mesh.RelativeLocation, pawn.Mesh.RelativeRotation
+        mesh:K2_SetRelativeLocationAndRotation({ X = rl.X, Y = rl.Y, Z = rl.Z },
+                                               { Pitch = rr.Pitch, Yaw = rr.Yaw, Roll = rr.Roll }, false, {}, true)
+        log("  mesh offset set to (%.0f, %.0f, %.0f) yaw %.0f", rl.X, rl.Y, rl.Z, rr.Yaw)
+      end)
+      pcall(function()
+        mesh.VisibilityBasedAnimTickOption = 0  -- always tick pose
+        mesh.bPauseAnims = false
+        mesh:SetComponentTickEnabled(true)
+      end)
       mesh:SetAnimationMode(0)  -- AnimationBlueprint
       mesh:SetAnimClass(playerAnimClass)
       cur = mesh:GetAnimInstance()
       log("ghost animation set: %s", valid(cur) and className(cur) or "still none")
+      pcall(function()
+        ghost.AnimationComponent:SetAnimLayersAsset(pawn.AnimationComponent.LayersAsset)  -- again, now that the blueprint exists
+        log("  ghost AnimComp=%s", valid(cur.AnimComp) and cur.AnimComp:GetFullName() or "<none>")
+      end)
     end
     done = valid(cur)
   end)
@@ -317,4 +356,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost report, F7 characters, F8 appearance, F9 ghost (preview character) [round 4]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost report, F7 characters, F8 appearance, F9 ghost (preview character) [round 5]")
