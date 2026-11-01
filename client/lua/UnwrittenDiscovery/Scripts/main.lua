@@ -1,7 +1,7 @@
 -- UnwrittenDiscovery: Phase 0 step 2. Runs inside Hogwarts Legacy through UE4SS.
 -- No networking. It answers three questions on your own PC:
 --   F5  What is the player? (class, position, meshes, animation blueprint)
---   F6  Ghost test: a student NPC body replays your path 2 s behind
+--   F6  Report on the current ghost and retry giving it animation
 --   F7  What other characters exist nearby? (candidate classes for remote-player puppets)
 --   F8  What is the player wearing? (appearance data we will sync later)
 --   F9  Ghost test: the game's preview character, wearing your look, replays your path
@@ -142,6 +142,8 @@ local function buildStudentGhost(pawn)
   return a
 end
 
+local pendingAnimFix = 0  -- countdown of animation-fix retries for a new preview ghost
+
 -- Puppet v2: the game's own character-preview actor. It shares Biped_Character with the
 -- player and carries a CustomizableCharacterComponent, so it can wear the player's look.
 local function buildPreviewGhost(pawn)
@@ -158,13 +160,48 @@ local function buildPreviewGhost(pawn)
   if not ok then log("  copying appearance failed: %s", tostring(err)) end
   prepareBody(a)
   takeControl(a)
-  -- If the preview actor has a "preview only" animation, give it the player's.
-  pcall(function()
-    local playerAnim = pawn.Mesh:GetAnimInstance()
-    a.Customization:SetAnimInstanceClass(playerAnim:GetClass())
-    log("  anim class set to %s", className(playerAnim))
-  end)
+  pendingAnimFix = 20  -- the look loads asynchronously; retry the animation fix for ~10 s
   return a
+end
+
+-- Round 4: the preview body walks (round 3 log) but has no animation running on its mesh,
+-- so it stays in a T-pose. Give its main mesh the player's animation blueprint once the
+-- look has loaded, and report what every mesh piece is doing.
+local function fixGhostAnimation(verbose)
+  local pawn = getPlayerPawn()
+  if not (pawn and valid(ghost)) then return true end
+  local done = false
+  local ok, err = pcall(function()
+    local mesh = ghost.Mesh
+    local playerAnimClass = pawn.Mesh:GetAnimInstance():GetClass()
+    local cur = mesh:GetAnimInstance()
+    if verbose then
+      log("ghost mesh=%s animMode=%s anim=%s", valid(mesh.SkeletalMesh) and mesh.SkeletalMesh:GetFName():ToString() or "<none>",
+          tostring(mesh.AnimationMode), valid(cur) and className(cur) or "<none>")
+    end
+    if not valid(mesh.SkeletalMesh) then return end  -- look not loaded yet
+    if not valid(cur) then
+      mesh:SetAnimationMode(0)  -- AnimationBlueprint
+      mesh:SetAnimClass(playerAnimClass)
+      cur = mesh:GetAnimInstance()
+      log("ghost animation set: %s", valid(cur) and className(cur) or "still none")
+    end
+    done = valid(cur)
+  end)
+  if not ok then log("animation fix failed: %s", tostring(err)); return true end
+  if verbose then
+    pcall(function()
+      local comps = ghost:K2_GetComponentsByClass(StaticFindObject("/Script/Engine.SkeletalMeshComponent"))
+      for i = 1, #comps do
+        local c = comps[i]:get()
+        local an = c:GetAnimInstance()
+        log("  ghost piece [%d] %s mesh=%s anim=%s", i, c:GetFName():ToString(),
+            valid(c.SkeletalMesh) and c.SkeletalMesh:GetFName():ToString() or "<none>",
+            valid(an) and className(an) or "<none>")
+      end
+    end)
+  end
+  return done
 end
 
 -- Round 3: ask the game's own AI navigation to walk the body to where you were. NPCs walk
@@ -212,6 +249,13 @@ local function toggleGhost(builder)
         table.insert(history, { t = now, x = l.X, y = l.Y, z = l.Z, yaw = p:K2_GetActorRotation().Yaw,
                                 speed = math.sqrt(v.X * v.X + v.Y * v.Y) })
         while #history > 2 and history[2].t <= now - DELAY do table.remove(history, 1) end
+        if pendingAnimFix > 0 and math.floor(now * 2) ~= math.floor((now - 0.034) * 2) then
+          pendingAnimFix = pendingAnimFix - 1
+          if fixGhostAnimation(pendingAnimFix == 0) then
+            pendingAnimFix = 0
+            fixGhostAnimation(true)  -- one full report once it has worked
+          end
+        end
         local h = history[1]
         if h.t <= now - DELAY then
           local status = driveGhost(now, h)
@@ -223,7 +267,13 @@ local function toggleGhost(builder)
   end)
 end
 
-RegisterKeyBind(Key.F6, function() toggleGhost(buildStudentGhost) end)
+-- F6: report on the current ghost and retry the animation fix right now.
+RegisterKeyBind(Key.F6, function()
+  ExecuteInGameThread(function()
+    if not valid(ghost) then log("press F9 first to spawn a ghost"); return end
+    fixGhostAnimation(true)
+  end)
+end)
 RegisterKeyBind(Key.F9, function() toggleGhost(buildPreviewGhost) end)
 
 -- ------------------------------------------------------------------ F8: appearance
@@ -267,4 +317,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student), F7 characters, F8 appearance, F9 ghost (preview character) [round 3]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost report, F7 characters, F8 appearance, F9 ghost (preview character) [round 4]")
