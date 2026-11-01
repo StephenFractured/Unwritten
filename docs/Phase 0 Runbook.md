@@ -6,7 +6,7 @@ created: 2026-11-01
 
 These are the steps that need Hogwarts Legacy, so they run on Stephen's PC. Each step ends with what to send back. Plan and reasons: [[Phase 0 Plan]].
 
-The game install folder below means the folder that holds `HogwartsLegacy.exe`, usually `...\Hogwarts Legacy\Phoenix\Binaries\Win64\`. In Steam: right-click the game, Manage, Browse local files, then open `Phoenix\Binaries\Win64`.
+The game install folder below means `Phoenix\Binaries\Win64` inside the game install (Stephen's Epic install: `E:\HogwartsLegacy\Phoenix\Binaries\Win64`). **Not** the top game folder: it also has a `HogwartsLegacy.exe`, but that is only a small launcher and UE4SS will silently not load there.
 
 ## Step 1 (M1): get UE4SS running in the game, about 20 minutes
 
