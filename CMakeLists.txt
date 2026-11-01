@@ -17,11 +17,13 @@ else()
     GIT_REPOSITORY https://github.com/lsalzman/enet.git
     GIT_TAG v1.3.18)
   FetchContent_MakeAvailable(enet)
-  # ENet's CMake target does not export its include dir.
+  # ENet's CMake target does not export its include dir. (It already links ws2_32/winmm on Windows.)
   target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
-  if(WIN32)
-    target_link_libraries(enet PUBLIC ws2_32 winmm)
-  endif()
+endif()
+
+if(WIN32)
+  # windows.h (pulled in by enet.h) defines min/max macros that break std::min/std::max.
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
 add_executable(unwritten-server server/main.cpp)

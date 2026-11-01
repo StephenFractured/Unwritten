@@ -19,3 +19,5 @@ Phase 0 (current): prove players can sync. See [docs/Phase 0 Plan.md](docs/Phase
     cmake --build build --config Release
     ./build/unwritten-server --port 30120 --max 128
     ./build/botswarm --bots 128 --seconds 30
+
+On Windows (Visual Studio) the programs land in `build\Release\`: run `.\build\Release\unwritten-server.exe` and `.\build\Release\botswarm.exe`.
