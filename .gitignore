@@ -1,0 +1,5 @@
+build/
+# Game dumps stay private and out of the repo (legal hygiene).
+CXXHeaderDump/
+UE4SS_ObjectDump.txt
+*.log
