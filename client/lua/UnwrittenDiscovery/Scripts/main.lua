@@ -108,6 +108,27 @@ local function prepareBody(a)
   pcall(function() log("  controller: %s", valid(a.Controller) and className(a.Controller) or "<none>") end)
 end
 
+-- Copy the player's look onto any body that has a CustomizableCharacterComponent.
+local function copyLook(pawn, a)
+  local ok, err = pcall(function()
+    a.Customization:SetCharacterID(pawn.Customization.CharacterName)
+    a.Customization:ReloadCharacter()
+  end)
+  log("  copy your look: %s", ok and "requested" or ("failed: " .. tostring(err)))
+end
+
+-- Make sure a body has a controller (needed to walk) and that any AI brain is switched off.
+local function takeControl(a)
+  pcall(function()
+    if not valid(a.Controller) then a:SpawnDefaultController() end
+    log("  controller: %s", valid(a.Controller) and className(a.Controller) or "<none>")
+  end)
+  pcall(function()
+    local brain = a.Controller.BrainComponent
+    if valid(brain) then brain:StopLogic("Unwritten puppet"); log("  AI brain stopped") end
+  end)
+end
+
 local function buildStudentGhost(pawn)
   local student = FindFirstOf("BP_Student_C")
   if not valid(student) then log("no student loaded nearby - go somewhere with students"); return nil end
@@ -116,10 +137,8 @@ local function buildStudentGhost(pawn)
   if not a then log("student ghost spawn failed"); return nil end
   log("student ghost spawned: %s", a:GetFullName())
   prepareBody(a)
-  -- Students come with AI. Take the brain out so it only does what we say.
-  pcall(function()
-    if valid(a.Controller) then a.Controller:UnPossess(); log("  AI controller detached") end
-  end)
+  takeControl(a)
+  copyLook(pawn, a)
   return a
 end
 
@@ -138,6 +157,7 @@ local function buildPreviewGhost(pawn)
   end)
   if not ok then log("  copying appearance failed: %s", tostring(err)) end
   prepareBody(a)
+  takeControl(a)
   -- If the preview actor has a "preview only" animation, give it the player's.
   pcall(function()
     local playerAnim = pawn.Mesh:GetAnimInstance()
@@ -147,22 +167,29 @@ local function buildPreviewGhost(pawn)
   return a
 end
 
+-- Round 3: ask the game's own AI navigation to walk the body to where you were. NPCs walk
+-- this way, so they get proper root-motion animation and stay on the ground.
+local aiLib = nil
+local lastMove = 0
+local lastGoal = nil
 local function driveGhost(now, h)
   local g = ghost:K2_GetActorLocation()
   local dx, dy, dz = h.x - g.X, h.y - g.Y, h.z - g.Z
   local dist = math.sqrt(dx * dx + dy * dy)
-  if dist > SNAP_CM or math.abs(dz) > SNAP_CM then
+  if dist > 800 or math.abs(dz) > 600 then
     ghost:K2_SetActorLocationAndRotation({ X = h.x, Y = h.y, Z = h.z }, { Pitch = 0, Yaw = h.yaw, Roll = 0 }, false, {}, true)
-    return "snap"
+    return string.format("snap (was %.0f cm away)", dist)
   end
-  local speed = h.speed
-  if dist < 30 and speed < 20 then speed = 0 end
-  -- Head for where you were, at the speed you were going (plus a bit to catch up).
-  local dirx, diry = math.cos(math.rad(h.yaw)), math.sin(math.rad(h.yaw))
-  if dist > 30 then dirx, diry = dx / dist, dy / dist; speed = speed + dist * 0.5 end
-  local ok, err = pcall(function() ghost:SetWorldSpeedAndDirection(speed, { X = dirx, Y = diry, Z = 0 }) end)
-  if not ok then return "drive failed: " .. tostring(err) end
-  return string.format("drive speed %.0f dist %.0f", speed, dist)
+  if now - lastMove < 0.2 then return string.format("walking, %.0f cm behind", dist) end
+  if lastGoal and math.abs(lastGoal.x - h.x) + math.abs(lastGoal.y - h.y) < 40 and dist < 80 then
+    return string.format("idle, %.0f cm away", dist)
+  end
+  lastMove, lastGoal = now, h
+  aiLib = aiLib or StaticFindObject("/Script/AIModule.Default__AIBlueprintHelperLibrary")
+  local ok, err = pcall(function() aiLib:SimpleMoveToLocation(ghost.Controller, { X = h.x, Y = h.y, Z = h.z }) end)
+  if not ok then return "move failed: " .. tostring(err) end
+  local v = ghost:GetVelocity()
+  return string.format("move order sent, %.0f cm away, ghost speed %.0f", dist, math.sqrt(v.X * v.X + v.Y * v.Y))
 end
 
 local function toggleGhost(builder)
@@ -240,4 +267,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student), F7 characters, F8 appearance, F9 ghost (preview character) [round 2]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student), F7 characters, F8 appearance, F9 ghost (preview character) [round 3]")
