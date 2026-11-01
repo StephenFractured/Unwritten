@@ -1,7 +1,7 @@
 -- UnwrittenDiscovery: Phase 0 step 2. Runs inside Hogwarts Legacy through UE4SS.
 -- No networking. It answers three questions on your own PC:
 --   F5  What is the player? (class, position, meshes, animation blueprint)
---   F6  Report on the current ghost and retry giving it animation
+--   F6  Ghost test: a student NPC body wearing your look (round 6)
 --   F7  What other characters exist nearby? (candidate classes for remote-player puppets)
 --   F8  What is the player wearing? (appearance data we will sync later)
 --   F9  Ghost test: the game's preview character, wearing your look, replays your path
@@ -10,7 +10,12 @@
 local TAG = "[Unwritten] "
 local function log(fmt, ...) print(TAG .. string.format(fmt, ...) .. "\n") end
 
-local function valid(o) return o ~= nil and o:IsValid() end
+local function valid(o)
+  -- UE4SS sometimes hands back non-object values (round 5 crashed on a function value).
+  if type(o) ~= "userdata" then return false end
+  local ok, res = pcall(function() return o:IsValid() end)
+  return ok and res == true
+end
 
 local function className(o)
   if not valid(o) then return "<nil>" end
@@ -36,6 +41,14 @@ RegisterKeyBind(Key.F5, function()
   ExecuteInGameThread(function()
     local pawn = getPlayerPawn()
     if not pawn then log("no player pawn found yet - load a save first"); return end
+    if valid(ghost) then
+      log("ghost: %s", ghost:GetFullName())
+      pcall(function()
+        local ga = ghost.Mesh:GetAnimInstance()
+        local v = ghost:GetVelocity()
+        log("ghost anim=%s speed=%.0f", valid(ga) and className(ga) or "<none>", math.sqrt(v.X * v.X + v.Y * v.Y))
+      end)
+    end
     log("player pawn: %s", pawn:GetFullName())
     log("class      : %s", className(pawn))
     log("location   : %s", vecStr(pawn:K2_GetActorLocation()))
@@ -110,9 +123,13 @@ end
 
 -- Copy the player's look onto any body that has a CustomizableCharacterComponent.
 local function copyLook(pawn, a)
+  -- Player and preview bodies call it "Customization"; NPCs (students) call it "CCComponent".
   local ok, err = pcall(function()
-    a.Customization:SetCharacterID(pawn.Customization.CharacterName)
-    a.Customization:ReloadCharacter()
+    local cc = a.CCComponent
+    if not valid(cc) then cc = a.Customization end
+    log("  look component: %s", valid(cc) and cc:GetFName():ToString() or "<none>")
+    cc:SetCharacterID(pawn.Customization.CharacterName)
+    cc:ReloadCharacter()
   end)
   log("  copy your look: %s", ok and "requested" or ("failed: " .. tostring(err)))
 end
@@ -306,13 +323,8 @@ local function toggleGhost(builder)
   end)
 end
 
--- F6: report on the current ghost and retry the animation fix right now.
-RegisterKeyBind(Key.F6, function()
-  ExecuteInGameThread(function()
-    if not valid(ghost) then log("press F9 first to spawn a ghost"); return end
-    fixGhostAnimation(true)
-  end)
-end)
+-- F6: round 6 - a student NPC body (it has the game's NPC walking animations) wearing your look.
+RegisterKeyBind(Key.F6, function() toggleGhost(buildStudentGhost) end)
 RegisterKeyBind(Key.F9, function() toggleGhost(buildPreviewGhost) end)
 
 -- ------------------------------------------------------------------ F8: appearance
@@ -356,4 +368,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost report, F7 characters, F8 appearance, F9 ghost (preview character) [round 5]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 characters, F8 appearance, F9 ghost (preview character) [round 6]")
