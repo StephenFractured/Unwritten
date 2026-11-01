@@ -1,11 +1,10 @@
 -- UnwrittenDiscovery: Phase 0 step 2. Runs inside Hogwarts Legacy through UE4SS.
 -- No networking. It answers three questions on your own PC:
 --   F5  What is the player? (class, position, meshes, animation blueprint)
---   F6  Can we spawn a second body and move it? ("ghost" that replays you 2 s behind)
+--   F6  Ghost test: a student NPC body replays your path 2 s behind
 --   F7  What other characters exist nearby? (candidate classes for remote-player puppets)
 --   F8  What is the player wearing? (appearance data we will sync later)
---   F9  Ghost test v2: same as F6 but the body is the game's own preview character
---       (PHX_Biped_Preview_Actor, the same Biped_Character base class as the player)
+--   F9  Ghost test: the game's preview character, wearing your look, replays your path
 -- Output goes to the UE4SS console and UE4SS.log next to the game exe.
 
 local TAG = "[Unwritten] "
@@ -60,71 +59,110 @@ RegisterKeyBind(Key.F5, function()
   end)
 end)
 
--- ------------------------------------------------------------------ F6: ghost test
--- Spawns a body that follows your exact path 2 seconds late. If it moves and turns with
--- you, spawning + transform sync work. If it also animates, animation sync is solved too.
+-- ------------------------------------------------------------------ ghost tests (F6 / F9)
+-- A ghost replays your path 2 seconds late. Round 1 (2026-11-01) showed: teleporting a body
+-- every frame gives no animation, because Hogwarts Legacy animates characters with root
+-- motion (the animation moves the body). So round 2 drives the ghost the way the game drives
+-- NPCs: Ambulatory_Character:SetWorldSpeedAndDirection, and only teleports to fix big drift.
+--   F6  ghost = a copy of a student NPC (BP_Student_C) already loaded near you
+--   F9  ghost = the game's preview character (PHX_Biped_Preview_Actor) wearing your look
 local ghost = nil
-local history = {}  -- ring of {t, loc, yaw}
+local history = {}  -- {t, x, y, z, yaw, speed}
 local DELAY = 2.0
+local SNAP_CM = 400       -- teleport if the ghost drifts further than this
 local ghostLoopStarted = false
+local lastReport = 0
 
-local function spawnActor(world, classPath, loc)
+local function spawnActorOfClass(world, cls, loc, yaw)
   local statics = StaticFindObject("/Script/Engine.Default__GameplayStatics")
-  local cls = StaticFindObject(classPath)
-  if not valid(cls) then log("class not found: %s", classPath); return nil end
+  local half = math.rad(yaw or 0) / 2
   local xf = {
-    Rotation = { X = 0, Y = 0, Z = 0, W = 1 },
+    Rotation = { X = 0, Y = 0, Z = math.sin(half), W = math.cos(half) },
     Translation = { X = loc.X, Y = loc.Y, Z = loc.Z },
     Scale3D = { X = 1, Y = 1, Z = 1 },
   }
-  -- 1 = AlwaysSpawn (ignore collisions)
-  local a = statics:BeginDeferredActorSpawnFromClass(world, cls, xf, 1, nil)
+  local a = statics:BeginDeferredActorSpawnFromClass(world, cls, xf, 1, nil)  -- 1 = AlwaysSpawn
   if not valid(a) then return nil end
   statics:FinishSpawningActor(a, xf)
   return a
 end
 
--- Puppet v1: a plain SkeletalMeshActor wearing copies of the player's meshes.
--- It will probably T-pose: the game's AnimBP expects a real character. That is fine for
--- the transform test; animation is milestone M3 (see the Phase 0 plan).
-local function buildMeshGhost(pawn)
-  local world = pawn:GetWorld()
-  local loc = pawn:K2_GetActorLocation()
-  local a = spawnActor(world, "/Script/Engine.SkeletalMeshActor", loc)
-  if not a then log("ghost spawn failed"); return nil end
-  local dst = a.SkeletalMeshComponent
-  local comps = pawn:K2_GetComponentsByClass(StaticFindObject("/Script/Engine.SkeletalMeshComponent"))
-  if #comps > 0 then
-    local main = comps[1]:get()
-    dst:SetSkeletalMesh(main.SkeletalMesh, true)
-    -- Try reusing the player's animation blueprint class. Log what happens.
-    local anim = main:GetAnimInstance()
-    if valid(anim) then
-      dst:SetAnimInstanceClass(anim:GetClass())
-      log("ghost anim class set to %s", className(anim))
-    end
-  end
-  log("ghost spawned: %s", a:GetFullName())
+local function spawnActor(world, classPath, loc, yaw)
+  local cls = StaticFindObject(classPath)
+  if not valid(cls) then log("class not found: %s", classPath); return nil end
+  return spawnActorOfClass(world, cls, loc, yaw)
+end
+
+-- Log what we need to know about a freshly spawned body, and make sure it walks, not flies.
+local function prepareBody(a)
+  pcall(function()
+    local cm = a.CharacterMovement
+    log("  movement component: %s, mode %s", className(cm), tostring(cm.MovementMode))
+    cm:SetMovementMode(1, 0)  -- MOVE_Walking: gravity on, stays on the ground
+    log("  movement mode set to walking")
+  end)
+  pcall(function()
+    local anim = a.Mesh:GetAnimInstance()
+    log("  anim instance: %s", valid(anim) and className(anim) or "<none>")
+  end)
+  pcall(function() log("  controller: %s", valid(a.Controller) and className(a.Controller) or "<none>") end)
+end
+
+local function buildStudentGhost(pawn)
+  local student = FindFirstOf("BP_Student_C")
+  if not valid(student) then log("no student loaded nearby - go somewhere with students"); return nil end
+  local l = pawn:K2_GetActorLocation()
+  local a = spawnActorOfClass(pawn:GetWorld(), student:GetClass(), l, pawn:K2_GetActorRotation().Yaw)
+  if not a then log("student ghost spawn failed"); return nil end
+  log("student ghost spawned: %s", a:GetFullName())
+  prepareBody(a)
+  -- Students come with AI. Take the brain out so it only does what we say.
+  pcall(function()
+    if valid(a.Controller) then a.Controller:UnPossess(); log("  AI controller detached") end
+  end)
   return a
 end
 
 -- Puppet v2: the game's own character-preview actor. It shares Biped_Character with the
--- player, so the game's locomotion animation blueprint should accept it, and it carries a
--- CustomizableCharacterComponent, so it can wear the player's look.
+-- player and carries a CustomizableCharacterComponent, so it can wear the player's look.
 local function buildPreviewGhost(pawn)
-  local loc = pawn:K2_GetActorLocation()
-  local a = spawnActor(pawn:GetWorld(), "/Script/Phoenix.PHX_Biped_Preview_Actor", loc)
+  local l = pawn:K2_GetActorLocation()
+  local a = spawnActor(pawn:GetWorld(), "/Script/Phoenix.PHX_Biped_Preview_Actor", l, pawn:K2_GetActorRotation().Yaw)
   if not a then log("preview ghost spawn failed"); return nil end
   log("preview ghost spawned: %s", a:GetFullName())
   local ok, err = pcall(function()
     local src, dst = pawn.Customization, a.Customization
-    log("player CharacterName=%s Type=%s", src.CharacterName:ToString(), src.Type:ToString())
     dst:SetCharacterID(src.CharacterName)
     dst:ReloadCharacter()
-    log("asked ghost to load the player's character id")
+    log("  copied character id %s", src.CharacterName:ToString())
   end)
-  if not ok then log("copying appearance failed: %s", tostring(err)) end
+  if not ok then log("  copying appearance failed: %s", tostring(err)) end
+  prepareBody(a)
+  -- If the preview actor has a "preview only" animation, give it the player's.
+  pcall(function()
+    local playerAnim = pawn.Mesh:GetAnimInstance()
+    a.Customization:SetAnimInstanceClass(playerAnim:GetClass())
+    log("  anim class set to %s", className(playerAnim))
+  end)
   return a
+end
+
+local function driveGhost(now, h)
+  local g = ghost:K2_GetActorLocation()
+  local dx, dy, dz = h.x - g.X, h.y - g.Y, h.z - g.Z
+  local dist = math.sqrt(dx * dx + dy * dy)
+  if dist > SNAP_CM or math.abs(dz) > SNAP_CM then
+    ghost:K2_SetActorLocationAndRotation({ X = h.x, Y = h.y, Z = h.z }, { Pitch = 0, Yaw = h.yaw, Roll = 0 }, false, {}, true)
+    return "snap"
+  end
+  local speed = h.speed
+  if dist < 30 and speed < 20 then speed = 0 end
+  -- Head for where you were, at the speed you were going (plus a bit to catch up).
+  local dirx, diry = math.cos(math.rad(h.yaw)), math.sin(math.rad(h.yaw))
+  if dist > 30 then dirx, diry = dx / dist, dy / dist; speed = speed + dist * 0.5 end
+  local ok, err = pcall(function() ghost:SetWorldSpeedAndDirection(speed, { X = dirx, Y = diry, Z = 0 }) end)
+  if not ok then return "drive failed: " .. tostring(err) end
+  return string.format("drive speed %.0f dist %.0f", speed, dist)
 end
 
 local function toggleGhost(builder)
@@ -143,12 +181,14 @@ local function toggleGhost(builder)
         if not p then return end
         local now = os.clock()
         local l = p:K2_GetActorLocation()
-        table.insert(history, { t = now, x = l.X, y = l.Y, z = l.Z, yaw = p:K2_GetActorRotation().Yaw })
+        local v = p:GetVelocity()
+        table.insert(history, { t = now, x = l.X, y = l.Y, z = l.Z, yaw = p:K2_GetActorRotation().Yaw,
+                                speed = math.sqrt(v.X * v.X + v.Y * v.Y) })
         while #history > 2 and history[2].t <= now - DELAY do table.remove(history, 1) end
         local h = history[1]
         if h.t <= now - DELAY then
-          ghost:K2_SetActorLocationAndRotation({ X = h.x, Y = h.y, Z = h.z },
-                                               { Pitch = 0, Yaw = h.yaw, Roll = 0 }, false, {}, true)
+          local status = driveGhost(now, h)
+          if now - lastReport > 2 then lastReport = now; log("ghost: %s", status) end
         end
       end)
       return false  -- keep looping
@@ -156,7 +196,7 @@ local function toggleGhost(builder)
   end)
 end
 
-RegisterKeyBind(Key.F6, function() toggleGhost(buildMeshGhost) end)
+RegisterKeyBind(Key.F6, function() toggleGhost(buildStudentGhost) end)
 RegisterKeyBind(Key.F9, function() toggleGhost(buildPreviewGhost) end)
 
 -- ------------------------------------------------------------------ F8: appearance
@@ -200,4 +240,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (mesh), F7 characters, F8 appearance, F9 ghost (preview character)")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student), F7 characters, F8 appearance, F9 ghost (preview character) [round 2]")
