@@ -3,3 +3,4 @@ build/
 CXXHeaderDump/
 UE4SS_ObjectDump.txt
 *.log
+luac.out
