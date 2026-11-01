@@ -17,6 +17,9 @@ local function valid(o)
   return ok and res == true
 end
 
+local ghost = nil  -- the current ghost body (declared early so every key handler sees it)
+local ghostDrive = "nav"  -- "nav" = walk via AI pathfinding, "speed" = game locomotion speed+direction
+
 local function className(o)
   if not valid(o) then return "<nil>" end
   return o:GetClass():GetFName():ToString()
@@ -79,7 +82,6 @@ end)
 -- NPCs: Ambulatory_Character:SetWorldSpeedAndDirection, and only teleports to fix big drift.
 --   F6  ghost = a copy of a student NPC (BP_Student_C) already loaded near you
 --   F9  ghost = the game's preview character (PHX_Biped_Preview_Actor) wearing your look
-local ghost = nil
 local history = {}  -- {t, x, y, z, yaw, speed}
 local DELAY = 2.0
 local SNAP_CM = 400       -- teleport if the ghost drifts further than this
@@ -154,8 +156,14 @@ local function buildStudentGhost(pawn)
   if not a then log("student ghost spawn failed"); return nil end
   log("student ghost spawned: %s", a:GetFullName())
   prepareBody(a)
-  takeControl(a)
+  -- Round 2 log showed a student with its AI removed kept pace with you when driven by
+  -- SetWorldSpeedAndDirection; round 6 showed it does not walk via AI pathfinding. So: no AI,
+  -- and drive it with the game's locomotion speed + direction.
+  pcall(function()
+    if valid(a.Controller) then a.Controller:UnPossess(); log("  AI controller detached") end
+  end)
   copyLook(pawn, a)
+  ghostDrive = "speed"
   return a
 end
 
@@ -177,6 +185,7 @@ local function buildPreviewGhost(pawn)
   if not ok then log("  copying appearance failed: %s", tostring(err)) end
   prepareBody(a)
   takeControl(a)
+  ghostDrive = "nav"
   pendingAnimFix = 20  -- the look loads asynchronously; retry the animation fix for ~10 s
   return a
 end
@@ -265,7 +274,25 @@ end
 local aiLib = nil
 local lastMove = 0
 local lastGoal = nil
+local function driveGhostSpeed(h)
+  local g = ghost:K2_GetActorLocation()
+  local dx, dy, dz = h.x - g.X, h.y - g.Y, h.z - g.Z
+  local dist = math.sqrt(dx * dx + dy * dy)
+  if dist > 800 or math.abs(dz) > 600 then
+    ghost:K2_SetActorLocationAndRotation({ X = h.x, Y = h.y, Z = h.z }, { Pitch = 0, Yaw = h.yaw, Roll = 0 }, false, {}, true)
+    return string.format("snap (was %.0f cm away)", dist)
+  end
+  local speed, dirx, diry = h.speed, math.cos(math.rad(h.yaw)), math.sin(math.rad(h.yaw))
+  if dist > 30 then dirx, diry = dx / dist, dy / dist; speed = speed + dist * 0.5 end
+  if dist < 30 and h.speed < 20 then speed = 0 end
+  local ok, err = pcall(function() ghost:SetWorldSpeedAndDirection(speed, { X = dirx, Y = diry, Z = 0 }) end)
+  if not ok then return "drive failed: " .. tostring(err) end
+  local v = ghost:GetVelocity()
+  return string.format("speed order %.0f, %.0f cm away, ghost speed %.0f", speed, dist, math.sqrt(v.X * v.X + v.Y * v.Y))
+end
+
 local function driveGhost(now, h)
+  if ghostDrive == "speed" then return driveGhostSpeed(h) end
   local g = ghost:K2_GetActorLocation()
   local dx, dy, dz = h.x - g.X, h.y - g.Y, h.z - g.Z
   local dist = math.sqrt(dx * dx + dy * dy)
@@ -368,4 +395,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 characters, F8 appearance, F9 ghost (preview character) [round 6]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 characters, F8 appearance, F9 ghost (preview character) [round 7]")
