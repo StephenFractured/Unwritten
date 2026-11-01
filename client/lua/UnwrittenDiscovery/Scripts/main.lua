@@ -3,6 +3,9 @@
 --   F5  What is the player? (class, position, meshes, animation blueprint)
 --   F6  Can we spawn a second body and move it? ("ghost" that replays you 2 s behind)
 --   F7  What other characters exist nearby? (candidate classes for remote-player puppets)
+--   F8  What is the player wearing? (appearance data we will sync later)
+--   F9  Ghost test v2: same as F6 but the body is the game's own preview character
+--       (PHX_Biped_Preview_Actor, the same Biped_Character base class as the player)
 -- Output goes to the UE4SS console and UE4SS.log next to the game exe.
 
 local TAG = "[Unwritten] "
@@ -15,10 +18,12 @@ local function className(o)
   return o:GetClass():GetFName():ToString()
 end
 
--- The player pawn class is a guess until F5 confirms it. Community dumps call it
--- "Biped_Player"; if that finds nothing we fall back to the first PlayerController's pawn.
+-- Confirmed from Stephen's header dump (2026-11-01): the player is BP_Biped_Player_C,
+-- a Blueprint of the native Biped_Player : Biped_Character : Base_Character.
 local function getPlayerPawn()
-  local pawn = FindFirstOf("Biped_Player")
+  local pawn = FindFirstOf("BP_Biped_Player_C")
+  if valid(pawn) then return pawn end
+  pawn = FindFirstOf("Biped_Player")
   if valid(pawn) then return pawn end
   local pc = FindFirstOf("PlayerController")
   if valid(pc) and valid(pc.Pawn) then return pc.Pawn end
@@ -82,7 +87,7 @@ end
 -- Puppet v1: a plain SkeletalMeshActor wearing copies of the player's meshes.
 -- It will probably T-pose: the game's AnimBP expects a real character. That is fine for
 -- the transform test; animation is milestone M3 (see the Phase 0 plan).
-local function buildGhost(pawn)
+local function buildMeshGhost(pawn)
   local world = pawn:GetWorld()
   local loc = pawn:K2_GetActorLocation()
   local a = spawnActor(world, "/Script/Engine.SkeletalMeshActor", loc)
@@ -103,12 +108,31 @@ local function buildGhost(pawn)
   return a
 end
 
-RegisterKeyBind(Key.F6, function()
+-- Puppet v2: the game's own character-preview actor. It shares Biped_Character with the
+-- player, so the game's locomotion animation blueprint should accept it, and it carries a
+-- CustomizableCharacterComponent, so it can wear the player's look.
+local function buildPreviewGhost(pawn)
+  local loc = pawn:K2_GetActorLocation()
+  local a = spawnActor(pawn:GetWorld(), "/Script/Phoenix.PHX_Biped_Preview_Actor", loc)
+  if not a then log("preview ghost spawn failed"); return nil end
+  log("preview ghost spawned: %s", a:GetFullName())
+  local ok, err = pcall(function()
+    local src, dst = pawn.Customization, a.Customization
+    log("player CharacterName=%s Type=%s", src.CharacterName:ToString(), src.Type:ToString())
+    dst:SetCharacterID(src.CharacterName)
+    dst:ReloadCharacter()
+    log("asked ghost to load the player's character id")
+  end)
+  if not ok then log("copying appearance failed: %s", tostring(err)) end
+  return a
+end
+
+local function toggleGhost(builder)
   ExecuteInGameThread(function()
     local pawn = getPlayerPawn()
     if not pawn then log("load a save first"); return end
     if valid(ghost) then ghost:K2_DestroyActor(); ghost = nil; log("ghost removed"); return end
-    ghost = buildGhost(pawn)
+    ghost = builder(pawn)
     history = {}
     if ghostLoopStarted then return end
     ghostLoopStarted = true
@@ -129,6 +153,30 @@ RegisterKeyBind(Key.F6, function()
       end)
       return false  -- keep looping
     end)
+  end)
+end
+
+RegisterKeyBind(Key.F6, function() toggleGhost(buildMeshGhost) end)
+RegisterKeyBind(Key.F9, function() toggleGhost(buildPreviewGhost) end)
+
+-- ------------------------------------------------------------------ F8: appearance
+RegisterKeyBind(Key.F8, function()
+  ExecuteInGameThread(function()
+    local pawn = getPlayerPawn()
+    if not pawn then return end
+    local ok, err = pcall(function()
+      local c = pawn.Customization
+      log("Customization: %s", c:GetFullName())
+      log("  CharacterName=%s Type=%s", c.CharacterName:ToString(), c.Type:ToString())
+      local n = 0
+      c.AddOnMeshes:ForEach(function(k, v)
+        n = n + 1
+        local mesh = v:get()
+        log("  piece %-24s -> %s", k:get():ToString(), valid(mesh) and mesh:GetFullName() or "<none>")
+      end)
+      log("  %d add-on mesh pieces", n)
+    end)
+    if not ok then log("appearance dump failed: %s", tostring(err)) end
   end)
 end)
 
@@ -152,4 +200,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 = describe player, F6 = ghost test, F7 = list characters")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (mesh), F7 characters, F8 appearance, F9 ghost (preview character)")

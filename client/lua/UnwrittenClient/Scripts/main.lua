@@ -14,7 +14,9 @@ if UW_Connect == nil then
 end
 
 local function getPlayerPawn()
-  local pawn = FindFirstOf("Biped_Player")  -- confirm with UnwrittenDiscovery F5
+  local pawn = FindFirstOf("BP_Biped_Player_C")  -- confirmed from the header dump
+  if valid(pawn) then return pawn end
+  pawn = FindFirstOf("Biped_Player")
   if valid(pawn) then return pawn end
   local pc = FindFirstOf("PlayerController")
   if valid(pc) and valid(pc.Pawn) then return pc.Pawn end
