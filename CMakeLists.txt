@@ -17,19 +17,21 @@ else()
     GIT_REPOSITORY https://github.com/lsalzman/enet.git
     GIT_TAG v1.3.18)
   FetchContent_MakeAvailable(enet)
-  # ENet's CMake target does not export its include dir. (It already links ws2_32/winmm on Windows.)
+  # ENet's CMake target does not export its include dir.
   target_include_directories(enet PUBLIC ${enet_SOURCE_DIR}/include)
 endif()
 
 if(WIN32)
   # windows.h (pulled in by enet.h) defines min/max macros that break std::min/std::max.
   add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+  # ENet v1.3.18 does not link its own Windows socket/timer libraries, so we do.
+  set(UW_PLATFORM_LIBS ws2_32 winmm)
 endif()
 
 add_executable(unwritten-server server/main.cpp)
 target_include_directories(unwritten-server PRIVATE shared)
-target_link_libraries(unwritten-server PRIVATE enet)
+target_link_libraries(unwritten-server PRIVATE enet ${UW_PLATFORM_LIBS})
 
 add_executable(botswarm tools/botswarm/main.cpp)
 target_include_directories(botswarm PRIVATE shared)
-target_link_libraries(botswarm PRIVATE enet)
+target_link_libraries(botswarm PRIVATE enet ${UW_PLATFORM_LIBS})
