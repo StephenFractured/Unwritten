@@ -163,7 +163,16 @@ local function buildStudentGhost(pawn)
     if valid(a.Controller) then a.Controller:UnPossess(); log("  AI controller detached") end
   end)
   copyLook(pawn, a)
-  ghostDrive = "speed"
+  -- Round 8: puppet mode. No physics of its own; we place it every tick and feed its
+  -- movement component the velocity you had, which is what its animation blueprint reads
+  -- to pick idle / walk / run. Root motion is ignored so the animation can't drag it away.
+  pcall(function() a.CharacterMovement:SetMovementMode(0, 0); log("  movement mode set to none (puppet)") end)
+  pcall(function()
+    local ai = a.Mesh:GetAnimInstance()
+    ai.RootMotionMode = 1  -- IgnoreRootMotion
+    log("  root motion ignored on %s", className(ai))
+  end)
+  ghostDrive = "puppet"
   return a
 end
 
@@ -291,7 +300,23 @@ local function driveGhostSpeed(h)
   return string.format("speed order %.0f, %.0f cm away, ghost speed %.0f", speed, dist, math.sqrt(v.X * v.X + v.Y * v.Y))
 end
 
+local function driveGhostPuppet(h)
+  local g = ghost:K2_GetActorLocation()
+  local dx, dy = h.x - g.X, h.y - g.Y
+  local dist = math.sqrt(dx * dx + dy * dy)
+  ghost:K2_SetActorLocationAndRotation({ X = h.x, Y = h.y, Z = h.z }, { Pitch = 0, Yaw = h.yaw, Roll = 0 }, false, {}, true)
+  local ok, err = pcall(function()
+    local cm = ghost.CharacterMovement
+    cm.Velocity = { X = h.vx or 0, Y = h.vy or 0, Z = h.vz or 0 }
+  end)
+  if not ok then return "velocity set failed: " .. tostring(err) end
+  local v = ghost:GetVelocity()
+  return string.format("puppet: placed (moved %.0f cm), your old speed %.0f, ghost reports speed %.0f",
+                       dist, h.speed, math.sqrt(v.X * v.X + v.Y * v.Y))
+end
+
 local function driveGhost(now, h)
+  if ghostDrive == "puppet" then return driveGhostPuppet(h) end
   if ghostDrive == "speed" then return driveGhostSpeed(h) end
   local g = ghost:K2_GetActorLocation()
   local dx, dy, dz = h.x - g.X, h.y - g.Y, h.z - g.Z
@@ -330,7 +355,7 @@ local function toggleGhost(builder)
         local l = p:K2_GetActorLocation()
         local v = p:GetVelocity()
         table.insert(history, { t = now, x = l.X, y = l.Y, z = l.Z, yaw = p:K2_GetActorRotation().Yaw,
-                                speed = math.sqrt(v.X * v.X + v.Y * v.Y) })
+                                speed = math.sqrt(v.X * v.X + v.Y * v.Y), vx = v.X, vy = v.Y, vz = v.Z })
         while #history > 2 and history[2].t <= now - DELAY do table.remove(history, 1) end
         if pendingAnimFix > 0 and math.floor(now * 2) ~= math.floor((now - 0.034) * 2) then
           pendingAnimFix = pendingAnimFix - 1
@@ -395,4 +420,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 characters, F8 appearance, F9 ghost (preview character) [round 7]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 characters, F8 appearance, F9 ghost (preview character) [round 8]")
