@@ -71,14 +71,14 @@ git submodule update --init --recursive
 cd ..
 ```
 
-The first line makes git use your normal GitHub sign-in instead of SSH keys. If a browser window asks you to sign in to GitHub during the submodule step, sign in with the account you linked to Epic. If that step fails on `deps/first/Unreal`, the Epic invite from 3a isn't active yet.
+The first line makes git use your normal GitHub sign-in instead of SSH keys. If a browser window asks you to sign in to GitHub during the submodule step, sign in with the account you linked to Epic. If that step fails on `deps/first/Unreal` (or CMake later says `deps/first/Unreal` has no CMakeLists.txt), the Epic invite from 3a isn't active yet; accept it and rerun the submodule command. The extra `Rust_*` options in 3d are needed because UE4SS 3.0.1's Rust finder can't read the output of current rustup.
 
 ### 3d. Build (first build takes 10 to 20 minutes)
 
 Still in `E:\Unwritten\Unwritten\client\cpp`:
 
 ```
-cmake -S . -B build -G "Visual Studio 18 2026" -T v143 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+cmake -S . -B build -G "Visual Studio 18 2026" -T v143 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DRust_COMPILER=$env:USERPROFILE\.cargo\bin\rustc.exe" "-DRust_CARGO=$env:USERPROFILE\.cargo\bin\cargo.exe" "-DRust_RESOLVE_RUSTUP_TOOLCHAINS=OFF"
 cmake --build build --config Game__Shipping__Win64 --target UnwrittenClient
 ```
 
