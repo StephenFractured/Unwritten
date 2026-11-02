@@ -18,6 +18,7 @@ local function valid(o)
 end
 
 local ghost = nil  -- the current ghost body (declared early so every key handler sees it)
+local hookAnimUpdate  -- defined further down; forward-declared so the student builder can call it
 local ghostDrive = "nav"  -- "nav" = walk via AI pathfinding, "speed" = game locomotion speed+direction
 
 local function className(o)
@@ -335,7 +336,7 @@ end
 animTarget = nil
 local hookedClasses = {}
 local hookHits = 0
-local function hookAnimUpdate(g)
+function hookAnimUpdate(g)
   local ok, err = pcall(function()
     local ai = g.Mesh:GetAnimInstance()
     local clsPath = ai:GetClass():GetFullName():match("^%S+%s+(.+)$")  -- strip "BlueprintGeneratedClass "
@@ -571,4 +572,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 12]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 12b]")
