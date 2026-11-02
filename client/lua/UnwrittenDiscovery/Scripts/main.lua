@@ -283,6 +283,48 @@ end
 local aiLib = nil
 local lastMove = 0
 local lastGoal = nil
+-- Round 9: the game's animation runs off a handful of inputs on the AnimInstance
+-- (Ambulatory_AnimInstance: Speed, IsMoving, MobilityActionState, ...). Read them from your
+-- character each tick and write the same values onto the puppet. This is the design we will
+-- network: send these few numbers, not bones.
+local ANIM_FLOATS = { "Speed", "MaxSpeed", "DesiredDirection", "LookAtDirection", "WalkRunLean", "PlayRate" }
+local ANIM_BOOLS = { "IsMoving", "IsMovementInput" }
+function readAnimInputs(pawn)
+  local ok, r = pcall(function()
+    local ai = pawn.Mesh:GetAnimInstance()
+    local t = { mode = ai.MobilityModeState, action = ai.MobilityActionState }
+    for _, k in ipairs(ANIM_FLOATS) do t[k] = ai[k] end
+    for _, k in ipairs(ANIM_BOOLS) do t[k] = ai[k] end
+    return t
+  end)
+  return ok and r or nil
+end
+
+local animWriteError = nil
+local function writeAnimInputs(g, a)
+  if not a then return end
+  local ok, err = pcall(function()
+    local ai = g.Mesh:GetAnimInstance()
+    ai:Set_MobilityModeState(a.mode)
+    ai:Set_MobilityActionState(a.action)
+    ai:Set_Speed(a.Speed); ai:Set_MaxSpeed(a.MaxSpeed); ai:Set_PlayRate(a.PlayRate)
+    ai:Set_DesiredDirection(a.DesiredDirection); ai:Set_LookAtDirection(a.LookAtDirection)
+    ai:Set_WalkRunLean(a.WalkRunLean)
+    ai:Set_IsMoving(a.IsMoving); ai:Set_IsMovementInput(a.IsMovementInput)
+  end)
+  if not ok then animWriteError = tostring(err) end
+  -- Also tell the character itself, in case the blueprint re-reads state from it each frame.
+  pcall(function() g:SetMobilityModeState(a.mode) end)
+  pcall(function() g:SetMobilityActionState(a.action, false) end)
+end
+
+local function animStr(a)
+  if not a then return "<none>" end
+  return string.format("mode=%s action=%s speed=%.0f max=%.0f moving=%s input=%s dir=%.0f rate=%.2f",
+    tostring(a.mode), tostring(a.action), a.Speed or -1, a.MaxSpeed or -1, tostring(a.IsMoving),
+    tostring(a.IsMovementInput), a.DesiredDirection or 0, a.PlayRate or 0)
+end
+
 local function driveGhostSpeed(h)
   local g = ghost:K2_GetActorLocation()
   local dx, dy, dz = h.x - g.X, h.y - g.Y, h.z - g.Z
@@ -305,14 +347,10 @@ local function driveGhostPuppet(h)
   local dx, dy = h.x - g.X, h.y - g.Y
   local dist = math.sqrt(dx * dx + dy * dy)
   ghost:K2_SetActorLocationAndRotation({ X = h.x, Y = h.y, Z = h.z }, { Pitch = 0, Yaw = h.yaw, Roll = 0 }, false, {}, true)
-  local ok, err = pcall(function()
-    local cm = ghost.CharacterMovement
-    cm.Velocity = { X = h.vx or 0, Y = h.vy or 0, Z = h.vz or 0 }
-  end)
-  if not ok then return "velocity set failed: " .. tostring(err) end
-  local v = ghost:GetVelocity()
-  return string.format("puppet: placed (moved %.0f cm), your old speed %.0f, ghost reports speed %.0f",
-                       dist, h.speed, math.sqrt(v.X * v.X + v.Y * v.Y))
+  writeAnimInputs(ghost, h.anim)
+  local after = readAnimInputs(ghost)
+  return string.format("puppet moved %.0f cm\n    you : %s\n    copy: %s%s", dist, animStr(h.anim), animStr(after),
+                       animWriteError and ("\n    write error: " .. animWriteError) or "")
 end
 
 local function driveGhost(now, h)
@@ -355,7 +393,8 @@ local function toggleGhost(builder)
         local l = p:K2_GetActorLocation()
         local v = p:GetVelocity()
         table.insert(history, { t = now, x = l.X, y = l.Y, z = l.Z, yaw = p:K2_GetActorRotation().Yaw,
-                                speed = math.sqrt(v.X * v.X + v.Y * v.Y), vx = v.X, vy = v.Y, vz = v.Z })
+                                speed = math.sqrt(v.X * v.X + v.Y * v.Y), vx = v.X, vy = v.Y, vz = v.Z,
+                                anim = readAnimInputs(p) })
         while #history > 2 and history[2].t <= now - DELAY do table.remove(history, 1) end
         if pendingAnimFix > 0 and math.floor(now * 2) ~= math.floor((now - 0.034) * 2) then
           pendingAnimFix = pendingAnimFix - 1
@@ -420,4 +459,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 characters, F8 appearance, F9 ghost (preview character) [round 8]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 characters, F8 appearance, F9 ghost (preview character) [round 9]")
