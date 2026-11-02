@@ -83,6 +83,8 @@ cmake -S . -B build -G "Visual Studio 18 2026" -T v143 "-DCMAKE_POLICY_VERSION_M
 cmake --build build --config Game__Shipping__Win64 --target UnwrittenClient
 ```
 
+Run the `cmake -S . -B build ...` line **twice** before building on a fresh `build` folder. UE4SS registers its build names (`Game__Shipping__Win64`) only after its Rust helper picks a copy destination, so on the first pass that destination is blank and the build fails with `cmake -E make_directory` printing its usage text.
+
 When it finishes, the build copies `main.dll` straight into `E:\HogwartsLegacy\Phoenix\Binaries\Win64\ue4ss\Mods\UnwrittenClient\dlls\`. (If your game is somewhere else, add `-DUW_MODS_DIR="<your Win64>\ue4ss\Mods"` to the first command.)
 
 **Send back:** the last 30 lines of output if either command fails.
