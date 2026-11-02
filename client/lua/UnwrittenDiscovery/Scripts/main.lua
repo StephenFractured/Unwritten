@@ -166,13 +166,8 @@ local function buildStudentGhost(pawn)
   -- Round 8: puppet mode. No physics of its own; we place it every tick and feed its
   -- movement component the velocity you had, which is what its animation blueprint reads
   -- to pick idle / walk / run. Root motion is ignored so the animation can't drag it away.
-  pcall(function() a.CharacterMovement:SetMovementMode(0, 0); log("  movement mode set to none (puppet)") end)
-  pcall(function()
-    local ai = a.Mesh:GetAnimInstance()
-    ai.RootMotionMode = 1  -- IgnoreRootMotion
-    log("  root motion ignored on %s", className(ai))
-  end)
-  ghostDrive = "puppet"
+  -- Rounds 8-9 "puppet mode" (movement off + placed every frame) crashed the game; not used.
+  ghostDrive = "anim"
   return a
 end
 
@@ -287,42 +282,71 @@ local lastGoal = nil
 -- (Ambulatory_AnimInstance: Speed, IsMoving, MobilityActionState, ...). Read them from your
 -- character each tick and write the same values onto the puppet. This is the design we will
 -- network: send these few numbers, not bones.
-local ANIM_FLOATS = { "Speed", "MaxSpeed", "DesiredDirection", "LookAtDirection", "WalkRunLean", "PlayRate" }
-local ANIM_BOOLS = { "IsMoving", "IsMovementInput" }
+-- Round 11: the round-10 probe found what actually changes on your character's animation
+-- when you run: DesiredWorldSpeed (0 -> 450), DesiredWorldDirection, AnimSpeedType (0 -> 4),
+-- AnimMechanicType (1 -> 2), IsInIdle, IsMovementInput, GameTimeAtStartMove.
+-- These are what we copy now (and what we will send over the network).
 function readAnimInputs(pawn)
   local ok, r = pcall(function()
     local ai = pawn.Mesh:GetAnimInstance()
-    local t = { mode = ai.MobilityModeState, action = ai.MobilityActionState }
-    for _, k in ipairs(ANIM_FLOATS) do t[k] = ai[k] end
-    for _, k in ipairs(ANIM_BOOLS) do t[k] = ai[k] end
-    return t
+    local d = ai.DesiredWorldDirection
+    return { speed = ai.DesiredWorldSpeed, dx = d.X, dy = d.Y, speedType = ai.AnimSpeedType,
+             mechanic = ai.AnimMechanicType, idle = ai.IsInIdle, input = ai.IsMovementInput,
+             startMove = ai.GameTimeAtStartMove }
   end)
   return ok and r or nil
 end
 
 local animWriteError = nil
-local function writeAnimInputs(g, a)
+local function setField(obj, k, v)
+  local ok, err = pcall(function() obj[k] = v end)
+  if not ok then animWriteError = k .. ": " .. tostring(err) end
+end
+
+-- speed/dir override lets the caller steer toward where you were.
+local function writeAnimInputs(g, a, speed, dirx, diry)
   if not a then return end
-  local ok, err = pcall(function()
-    local ai = g.Mesh:GetAnimInstance()
-    ai:Set_MobilityModeState(a.mode)
-    ai:Set_MobilityActionState(a.action)
-    ai:Set_Speed(a.Speed); ai:Set_MaxSpeed(a.MaxSpeed); ai:Set_PlayRate(a.PlayRate)
-    ai:Set_DesiredDirection(a.DesiredDirection); ai:Set_LookAtDirection(a.LookAtDirection)
-    ai:Set_WalkRunLean(a.WalkRunLean)
-    ai:Set_IsMoving(a.IsMoving); ai:Set_IsMovementInput(a.IsMovementInput)
-  end)
-  if not ok then animWriteError = tostring(err) end
-  -- Also tell the character itself, in case the blueprint re-reads state from it each frame.
-  pcall(function() g:SetMobilityModeState(a.mode) end)
-  pcall(function() g:SetMobilityActionState(a.action, false) end)
+  local ai = g.Mesh:GetAnimInstance()
+  if not valid(ai) then animWriteError = "ghost has no anim instance"; return end
+  setField(ai, "DesiredWorldSpeed", speed)
+  setField(ai, "LastDesiredWorldSpeed", speed)
+  setField(ai, "DesiredWorldDirection", { X = dirx, Y = diry, Z = 0 })
+  setField(ai, "LastDesiredWorldDirection", { X = dirx, Y = diry, Z = 0 })
+  setField(ai, "AnimSpeedType", a.speedType)
+  setField(ai, "AnimMechanicType", a.mechanic)
+  setField(ai, "IsInIdle", a.idle)
+  setField(ai, "IsMovementInput", a.input)
+  -- and the character-level command that normally sets these
+  pcall(function() g:SetWorldSpeedAndDirection(speed, { X = dirx, Y = diry, Z = 0 }) end)
 end
 
 local function animStr(a)
   if not a then return "<none>" end
-  return string.format("mode=%s action=%s speed=%.0f max=%.0f moving=%s input=%s dir=%.0f rate=%.2f",
-    tostring(a.mode), tostring(a.action), a.Speed or -1, a.MaxSpeed or -1, tostring(a.IsMoving),
-    tostring(a.IsMovementInput), a.DesiredDirection or 0, a.PlayRate or 0)
+  return string.format("speed=%.0f dir=(%.2f,%.2f) speedType=%s mechanic=%s idle=%s input=%s",
+    a.speed or -1, a.dx or 0, a.dy or 0, tostring(a.speedType), tostring(a.mechanic), tostring(a.idle), tostring(a.input))
+end
+
+local function driveGhostAnim(h)
+  local g = ghost:K2_GetActorLocation()
+  local dx, dy, dz = h.x - g.X, h.y - g.Y, h.z - g.Z
+  local dist = math.sqrt(dx * dx + dy * dy)
+  if dist > 600 or math.abs(dz) > 400 then
+    ghost:K2_SetActorLocationAndRotation({ X = h.x, Y = h.y, Z = h.z }, { Pitch = 0, Yaw = h.yaw, Roll = 0 }, false, {}, true)
+    return string.format("snap (was %.0f cm away)", dist)
+  end
+  local a = h.anim or {}
+  local speed = a.speed or 0
+  local dirx, diry = a.dx or 0, a.dy or 0
+  if dist > 50 then  -- steer toward where you were and catch up a little
+    dirx, diry = dx / dist, dy / dist
+    speed = math.max(speed, 150) + dist * 0.5
+  end
+  animWriteError = nil
+  writeAnimInputs(ghost, a, speed, dirx, diry)
+  local v = ghost:GetVelocity()
+  return string.format("anim drive, %.0f cm away, ghost speed %.0f\n    you : %s\n    copy: %s%s", dist,
+    math.sqrt(v.X * v.X + v.Y * v.Y), animStr(a), animStr(readAnimInputs(ghost)),
+    animWriteError and ("\n    write error: " .. animWriteError) or "")
 end
 
 local function driveGhostSpeed(h)
@@ -347,13 +371,13 @@ local function driveGhostPuppet(h)
   local dx, dy = h.x - g.X, h.y - g.Y
   local dist = math.sqrt(dx * dx + dy * dy)
   ghost:K2_SetActorLocationAndRotation({ X = h.x, Y = h.y, Z = h.z }, { Pitch = 0, Yaw = h.yaw, Roll = 0 }, false, {}, true)
-  writeAnimInputs(ghost, h.anim)
   local after = readAnimInputs(ghost)
   return string.format("puppet moved %.0f cm\n    you : %s\n    copy: %s%s", dist, animStr(h.anim), animStr(after),
                        animWriteError and ("\n    write error: " .. animWriteError) or "")
 end
 
 local function driveGhost(now, h)
+  if ghostDrive == "anim" then return driveGhostAnim(h) end
   if ghostDrive == "puppet" then return driveGhostPuppet(h) end
   if ghostDrive == "speed" then return driveGhostSpeed(h) end
   local g = ghost:K2_GetActorLocation()
@@ -510,4 +534,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 10]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 11]")
