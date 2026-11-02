@@ -168,6 +168,7 @@ local function buildStudentGhost(pawn)
   -- to pick idle / walk / run. Root motion is ignored so the animation can't drag it away.
   -- Rounds 8-9 "puppet mode" (movement off + placed every frame) crashed the game; not used.
   ghostDrive = "anim"
+  hookAnimUpdate(a)
   return a
 end
 
@@ -326,6 +327,41 @@ local function animStr(a)
     a.speed or -1, a.dx or 0, a.dy or 0, tostring(a.speedType), tostring(a.mechanic), tostring(a.idle), tostring(a.input))
 end
 
+-- Round 12: round 11 showed the copy keeps our values when we read them back, yet its pose
+-- never changes. Most likely the game recomputes them inside each animation update (from the
+-- copy's own movement, which is zero) and our 30-per-second writes land at the wrong moment.
+-- So hook the copy's animation update itself and re-apply our values right after it runs,
+-- every frame, just before the pose is built.
+animTarget = nil
+local hookedClasses = {}
+local hookHits = 0
+local function hookAnimUpdate(g)
+  local ok, err = pcall(function()
+    local ai = g.Mesh:GetAnimInstance()
+    local clsPath = ai:GetClass():GetFullName():match("^%S+%s+(.+)$")  -- strip "BlueprintGeneratedClass "
+    if hookedClasses[clsPath] then return end
+    local fn = clsPath .. ":BlueprintUpdateAnimation"
+    RegisterHook(fn, function(self, dt)
+      if not (valid(ghost) and animTarget) then return end
+      local me = self:get()
+      local gai = ghost.Mesh:GetAnimInstance()
+      if not (valid(gai) and me:GetAddress() == gai:GetAddress()) then return end
+      hookHits = hookHits + 1
+      local t = animTarget
+      setField(me, "DesiredWorldSpeed", t.speed)
+      setField(me, "LastDesiredWorldSpeed", t.speed)
+      setField(me, "DesiredWorldDirection", { X = t.dirx, Y = t.diry, Z = 0 })
+      setField(me, "AnimSpeedType", t.a.speedType)
+      setField(me, "AnimMechanicType", t.a.mechanic)
+      setField(me, "IsInIdle", t.a.idle)
+      setField(me, "IsMovementInput", t.a.input)
+    end)
+    hookedClasses[clsPath] = true
+    log("  hooked %s", fn)
+  end)
+  if not ok then log("  animation hook failed: %s", tostring(err)) end
+end
+
 local function driveGhostAnim(h)
   local g = ghost:K2_GetActorLocation()
   local dx, dy, dz = h.x - g.X, h.y - g.Y, h.z - g.Z
@@ -342,9 +378,10 @@ local function driveGhostAnim(h)
     speed = math.max(speed, 150) + dist * 0.5
   end
   animWriteError = nil
+  animTarget = { a = a, speed = speed, dirx = dirx, diry = diry }
   writeAnimInputs(ghost, a, speed, dirx, diry)
   local v = ghost:GetVelocity()
-  return string.format("anim drive, %.0f cm away, ghost speed %.0f\n    you : %s\n    copy: %s%s", dist,
+  return string.format("anim drive (hook hits %d), %.0f cm away, ghost speed %.0f\n    you : %s\n    copy: %s%s", hookHits, dist,
     math.sqrt(v.X * v.X + v.Y * v.Y), animStr(a), animStr(readAnimInputs(ghost)),
     animWriteError and ("\n    write error: " .. animWriteError) or "")
 end
@@ -534,4 +571,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 11]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 12]")
