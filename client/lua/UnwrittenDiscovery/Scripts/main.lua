@@ -28,6 +28,19 @@ end
 
 -- Confirmed from Stephen's header dump (2026-11-01): the player is BP_Biped_Player_C,
 -- a Blueprint of the native Biped_Player : Biped_Character : Base_Character.
+-- Run fn on the game thread every `ms`. Uses UE4SS's game-thread timer when available: the old
+-- LoopAsync + ExecuteInGameThread pattern hands a new closure across Lua states 30 times a second,
+-- and that corrupted the Lua state after ~10-60 s (rounds 8, 9, 16, 19 crashes; round 19 logged
+-- "No overload found for function 'FindFirstOf'" for a plain string argument right before dying).
+local function gameLoop(ms, fn)
+  local guarded = function()
+    local ok, err = pcall(fn)
+    if not ok then print("[Unwritten] loop error: " .. tostring(err) .. "\n") end
+  end
+  if LoopInGameThreadWithDelay then return LoopInGameThreadWithDelay(ms, guarded) end
+  LoopAsync(ms, function() ExecuteInGameThread(guarded); return false end)
+end
+
 local function getPlayerPawn()
   local pawn = FindFirstOf("BP_Biped_Player_C")
   if valid(pawn) then return pawn end
@@ -678,32 +691,29 @@ local function toggleGhost(builder)
     history = {}
     if ghostLoopStarted then return end
     ghostLoopStarted = true
-    LoopAsync(33, function()
-      ExecuteInGameThread(function()
-        if not valid(ghost) then return end
-        local p = getPlayerPawn()
-        if not p then return end
-        local now = os.clock()
-        local l = p:K2_GetActorLocation()
-        local v = p:GetVelocity()
-        table.insert(history, { t = now, x = l.X, y = l.Y, z = l.Z, yaw = p:K2_GetActorRotation().Yaw,
-                                speed = math.sqrt(v.X * v.X + v.Y * v.Y), vx = v.X, vy = v.Y, vz = v.Z,
-                                anim = (ghostDrive == "anim") and readAnimInputs(p) or nil })
-        while #history > 2 and history[2].t <= now - DELAY do table.remove(history, 1) end
-        if pendingAnimFix > 0 and math.floor(now * 2) ~= math.floor((now - 0.034) * 2) then
-          pendingAnimFix = pendingAnimFix - 1
-          if fixGhostAnimation(pendingAnimFix == 0) then
-            pendingAnimFix = 0
-            fixGhostAnimation(true)  -- one full report once it has worked
-          end
+    gameLoop(33, function()
+      if not valid(ghost) then return end
+      local p = getPlayerPawn()
+      if not p then return end
+      local now = os.clock()
+      local l = p:K2_GetActorLocation()
+      local v = p:GetVelocity()
+      table.insert(history, { t = now, x = l.X, y = l.Y, z = l.Z, yaw = p:K2_GetActorRotation().Yaw,
+                              speed = math.sqrt(v.X * v.X + v.Y * v.Y), vx = v.X, vy = v.Y, vz = v.Z,
+                              anim = (ghostDrive == "anim") and readAnimInputs(p) or nil })
+      while #history > 2 and history[2].t <= now - DELAY do table.remove(history, 1) end
+      if pendingAnimFix > 0 and math.floor(now * 2) ~= math.floor((now - 0.034) * 2) then
+        pendingAnimFix = pendingAnimFix - 1
+        if fixGhostAnimation(pendingAnimFix == 0) then
+          pendingAnimFix = 0
+          fixGhostAnimation(true)  -- one full report once it has worked
         end
-        local h = history[1]
-        if h.t <= now - DELAY then
-          local status = driveGhost(now, h)
-          if now - lastReport > 2 then lastReport = now; log("ghost: %s", status) end
-        end
-      end)
-      return false  -- keep looping
+      end
+      local h = history[1]
+      if h.t <= now - DELAY then
+        local status = driveGhost(now, h)
+        if now - lastReport > 2 then lastReport = now; log("ghost: %s", status) end
+      end
     end)
   end)
 end
@@ -808,4 +818,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 19: F2 = clip puppet, clips by path + TeleportTo]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 20: F2 = clip puppet on a game-thread timer]")

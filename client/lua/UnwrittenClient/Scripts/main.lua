@@ -13,6 +13,19 @@ if UW_Connect == nil then
   return
 end
 
+-- Run fn on the game thread every `ms`. Uses UE4SS's game-thread timer when available: the old
+-- LoopAsync + ExecuteInGameThread pattern hands a new closure across Lua states 30 times a second,
+-- and that corrupted the Lua state after ~10-60 s (rounds 8, 9, 16, 19 crashes; round 19 logged
+-- "No overload found for function 'FindFirstOf'" for a plain string argument right before dying).
+local function gameLoop(ms, fn)
+  local guarded = function()
+    local ok, err = pcall(fn)
+    if not ok then print("[Unwritten] loop error: " .. tostring(err) .. "\n") end
+  end
+  if LoopInGameThreadWithDelay then return LoopInGameThreadWithDelay(ms, guarded) end
+  LoopAsync(ms, function() ExecuteInGameThread(guarded); return false end)
+end
+
 local function getPlayerPawn()
   local pawn = FindFirstOf("BP_Biped_Player_C")  -- confirmed from the header dump
   if valid(pawn) then return pawn end
@@ -162,19 +175,16 @@ local loopStarted = false
 local function startLoop()
   if loopStarted then return end
   loopStarted = true
-  LoopAsync(math.floor(1000 / cfg.sendHz), function()
-    ExecuteInGameThread(function()
-      if not connected then return end
-      local now = wallNow()
-      -- Each step guarded so one bad frame (loading screen, cutscene) never kills the loop.
-      local ok, err = pcall(handleEvents, now)
-      if not ok then log("poll error: %s", tostring(err)) end
-      ok, err = pcall(sendOwnState, now)
-      if not ok then log("send error: %s", tostring(err)) end
-      ok, err = pcall(renderRemotes, now)
-      if not ok then log("render error: %s", tostring(err)) end
-    end)
-    return false
+  gameLoop(math.floor(1000 / cfg.sendHz), function()
+    if not connected then return end
+    local now = wallNow()
+    -- Each step guarded so one bad frame (loading screen, cutscene) never kills the loop.
+    local ok, err = pcall(handleEvents, now)
+    if not ok then log("poll error: %s", tostring(err)) end
+    ok, err = pcall(sendOwnState, now)
+    if not ok then log("send error: %s", tostring(err)) end
+    ok, err = pcall(renderRemotes, now)
+    if not ok then log("render error: %s", tostring(err)) end
   end)
 end
 
