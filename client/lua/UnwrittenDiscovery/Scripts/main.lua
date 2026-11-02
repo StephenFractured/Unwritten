@@ -2,7 +2,7 @@
 -- No networking. It answers three questions on your own PC:
 --   F5  What is the player? (class, position, meshes, animation blueprint)
 --   F6  Ghost test: a student NPC body wearing your look (round 6)
---   F7  What other characters exist nearby? (candidate classes for remote-player puppets)
+--   F7  Animation probe: press standing, then again while running; logs what changed
 --   F8  What is the player wearing? (appearance data we will sync later)
 --   F9  Ghost test: the game's preview character, wearing your look, replays your path
 -- Output goes to the UE4SS console and UE4SS.log next to the game exe.
@@ -440,23 +440,74 @@ RegisterKeyBind(Key.F8, function()
 end)
 
 -- ------------------------------------------------------------------ F7: nearby characters
+-- ------------------------------------------------------------------ F7: animation probe
+-- Round 10. Round 9 showed the animation fields we copied stay at 0 on YOUR character even
+-- while you run, so the game's walk/run animation is driven by something else. This finds it:
+-- press F7 standing still, then start running and press F7 again while still running. It logs
+-- every number/flag that changed on your character's animation, movement and character objects.
+local probeBefore = nil
+
+local function snapshotProps(obj, label, out)
+  if not valid(obj) then return end
+  local ok, err = pcall(function()
+    local cls = obj:GetClass()
+    while valid(cls) do
+      cls:ForEachProperty(function(prop)
+        local name = prop:GetFName():ToString()
+        local okv, v = pcall(function() return obj[name] end)
+        if okv then
+          local t = type(v)
+          if t == "number" or t == "boolean" then
+            out[label .. "." .. name] = v
+          elseif t == "userdata" then
+            -- vectors/rotators: record their parts if present
+            pcall(function()
+              if v.X ~= nil then out[label .. "." .. name .. ".X"] = v.X; out[label .. "." .. name .. ".Y"] = v.Y; out[label .. "." .. name .. ".Z"] = v.Z end
+            end)
+          end
+        end
+      end)
+      cls = cls:GetSuperStruct()
+    end
+  end)
+  if not ok then log("probe: could not read %s: %s", label, tostring(err)) end
+end
+
+local function probeSnapshot(pawn)
+  local out = {}
+  snapshotProps(pawn, "Character", out)
+  pcall(function() snapshotProps(pawn.Mesh:GetAnimInstance(), "AnimInstance", out) end)
+  pcall(function() snapshotProps(pawn.CharacterMovement, "Movement", out) end)
+  pcall(function() snapshotProps(pawn.AnimationComponent, "AnimationComponent", out) end)
+  return out
+end
+
 RegisterKeyBind(Key.F7, function()
   ExecuteInGameThread(function()
     local pawn = getPlayerPawn()
     if not pawn then return end
-    local me = pawn:K2_GetActorLocation()
-    local all = FindAllOf("Character") or {}
-    local counts = {}
-    for _, c in ipairs(all) do
-      if valid(c) then
-        local n = className(c)
-        counts[n] = (counts[n] or 0) + 1
+    if not probeBefore then
+      probeBefore = probeSnapshot(pawn)
+      local n = 0
+      for _ in pairs(probeBefore) do n = n + 1 end
+      log("probe: recorded %d values while standing. Now run, and press F7 again while running.", n)
+      return
+    end
+    local after = probeSnapshot(pawn)
+    local changed = {}
+    for k, v in pairs(after) do
+      local b = probeBefore[k]
+      if b ~= nil and b ~= v then
+        if type(v) ~= "number" or math.abs(v - b) > 0.001 then table.insert(changed, k) end
       end
     end
-    log("characters loaded: %d", #all)
-    for n, k in pairs(counts) do log("  %4d x %s", k, n) end
-    log("(your position %s)", vecStr(me))
+    table.sort(changed)
+    log("probe: %d values changed between standing and running:", #changed)
+    for _, k in ipairs(changed) do
+      log("  %-70s %s -> %s", k, tostring(probeBefore[k]), tostring(after[k]))
+    end
+    probeBefore = nil
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 characters, F8 appearance, F9 ghost (preview character) [round 9]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 10]")
