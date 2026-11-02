@@ -284,6 +284,23 @@ local function findClips(mesh)
   return chosen
 end
 
+-- Round 17: the round 16 log listed the game's human base-movement clips; use those by name
+-- instead of scanning all ~7000 clips (the scan froze the game for 2 s).
+local PREFERRED = {
+  idle = "Hu_BM_Idle_Casual_Loop_anm", walk = "Hu_BM_Walk_Loop_Fwd_anm",
+  run = "Hu_BM_Jog_Loop_Fwd_anm", sprint = "Hu_BM_Sprint_Loop_Fwd_anm",
+}
+local function findPreferredClips()
+  local chosen, missing = {}, 0
+  for state, name in pairs(PREFERRED) do
+    local seq = nil
+    pcall(function() seq = FindObject("AnimSequence", nil, name, false) end)
+    if valid(seq) then chosen[state] = seq; log("  %-6s %s", state, name)
+    else missing = missing + 1; log("  %-6s %s NOT FOUND", state, name) end
+  end
+  return chosen, missing
+end
+
 local function setupClipGhost(pawn)
   local mesh = ghost.Mesh
   if not valid(mesh.SkeletalMesh) then return false end  -- look still loading
@@ -293,7 +310,14 @@ local function setupClipGhost(pawn)
                                            { Pitch = rr.Pitch, Yaw = rr.Yaw, Roll = rr.Roll }, false, {}, true)
   end)
   pcall(function() mesh.VisibilityBasedAnimTickOption = 0; mesh:SetComponentTickEnabled(true) end)
-  clips = findClips(mesh)
+  local missing
+  clips, missing = findPreferredClips()
+  if missing > 0 then
+    log("  falling back to a one-time scan for the missing clips")
+    local scanned = findClips(mesh)
+    for k, v in pairs(scanned) do clips[k] = clips[k] or v end
+    collectgarbage()
+  end
   local ok, err = pcall(function() mesh:SetAnimationMode(1) end)  -- AnimationSingleNode: play clips directly
   log("  single-clip mode: %s", ok and "on" or tostring(err))
   return true
@@ -307,7 +331,10 @@ local function driveGhostClip(now, h)
     clipSetupTries = clipSetupTries + 1
     if not setupClipGhost(pawn) then return string.format("waiting for look to load (%d)", clipSetupTries) end
   end
-  ghost:K2_SetActorLocationAndRotation({ X = h.x, Y = h.y, Z = h.z }, { Pitch = 0, Yaw = h.yaw, Roll = 0 }, false, {}, true)
+  -- Round 17: K2_TeleportTo has no hit-result out-parameter. Every per-frame placement that used
+  -- K2_SetActorLocationAndRotation (rounds 8, 9, 16) crashed after 10-25 s; this tests whether
+  -- that call was the cause.
+  ghost:K2_TeleportTo({ X = h.x, Y = h.y, Z = h.z }, { Pitch = 0, Yaw = h.yaw, Roll = 0 })
   local state = "idle"
   if h.speed > 20 then state = "walk" end
   if h.speed > 260 then state = "run" end
@@ -656,7 +683,7 @@ local function toggleGhost(builder)
         local v = p:GetVelocity()
         table.insert(history, { t = now, x = l.X, y = l.Y, z = l.Z, yaw = p:K2_GetActorRotation().Yaw,
                                 speed = math.sqrt(v.X * v.X + v.Y * v.Y), vx = v.X, vy = v.Y, vz = v.Z,
-                                anim = readAnimInputs(p) })
+                                anim = (ghostDrive == "anim") and readAnimInputs(p) or nil })
         while #history > 2 and history[2].t <= now - DELAY do table.remove(history, 1) end
         if pendingAnimFix > 0 and math.floor(now * 2) ~= math.floor((now - 0.034) * 2) then
           pendingAnimFix = pendingAnimFix - 1
@@ -776,4 +803,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 16: F2 = clip puppet]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 17: F2 = clip puppet, named clips + TeleportTo]")
