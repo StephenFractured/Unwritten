@@ -6,7 +6,9 @@
 // game world's collision), the same model FiveM/RedM use. Everything that matters for
 // gameplay (money, damage, inventory) will be server-authoritative in Phase 1.
 //
-// Usage: unwritten-server [--port 30120] [--max 128]
+// Usage: unwritten-server [--port 30120] [--max 128] [--echo 1]
+//   --echo 1  test mode: each player also receives its own state, so one PC can see
+//             itself as a remote player (the client draws it as a trailing puppet).
 
 #include <enet/enet.h>
 
@@ -225,7 +227,7 @@ class Server {
       if (!viewer.hello || !viewer.has_state) continue;
       cands.clear();
       grid_.Query(viewer.state.pos, uw::kFarRadiusCm, [&](Player* o) {
-        if (o == &viewer) return;
+        if (o == &viewer && !echo_) return;
         float d2 = Dist2(o->state.pos, viewer.state.pos);
         if (d2 <= far2) cands.emplace_back(d2, o);
       });
@@ -260,6 +262,11 @@ class Server {
 
   ENetHost* host_ = nullptr;
   int max_players_ = 128;
+
+ public:
+  bool echo_ = false;
+
+ private:
   uint16_t next_id_ = 1;
   uint64_t tick_ = 0;
   std::unordered_map<uint16_t, Player> players_;
@@ -272,13 +279,17 @@ class Server {
 int main(int argc, char** argv) {
   uint16_t port = uw::kDefaultPort;
   int max_players = 128;
+  bool echo = false;
   for (int i = 1; i + 1 < argc; i += 2) {
     if (!std::strcmp(argv[i], "--port")) port = static_cast<uint16_t>(std::atoi(argv[i + 1]));
     else if (!std::strcmp(argv[i], "--max")) max_players = std::atoi(argv[i + 1]);
+    else if (!std::strcmp(argv[i], "--echo")) echo = std::atoi(argv[i + 1]) != 0;
   }
   if (enet_initialize() != 0) { std::fprintf(stderr, "enet init failed\n"); return 1; }
   atexit(enet_deinitialize);
   Server s;
+  s.echo_ = echo;
+  if (echo) std::printf("echo mode: players receive their own state\n");
   if (!s.Start(port, max_players)) return 1;
   s.Run();
 }

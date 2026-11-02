@@ -5,4 +5,8 @@ return {
   name = "Stephen",
   interpDelay = 0.10,      -- seconds remote players are rendered in the past (smooths jitter)
   sendHz = 30,
+  -- Test with one PC: start the server with "--echo 1" and your own movement comes back from the
+  -- server as a puppet trailing you by echoDelay seconds. Set false for real multiplayer.
+  echoSelf = true,
+  echoDelay = 1.5,
 }

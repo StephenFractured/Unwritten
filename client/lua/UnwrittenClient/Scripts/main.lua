@@ -37,31 +37,81 @@ local function getPlayerPawn()
 end
 
 -- ------------------------------------------------------------------ puppets
--- Puppet strategy is the main thing Phase 0 is testing. v1 = SkeletalMeshActor wearing the
--- local player's mesh (so remote players look like you for now; appearance sync is M5).
-local PUPPET_CLASS = "/Script/Engine.SkeletalMeshActor"
+-- Puppet v2, proven in UnwrittenDiscovery round 20: the game's character-preview body wearing a
+-- look, placed every frame with K2_TeleportTo, its mesh playing the game's own human locomotion
+-- clips directly (idle / walk / jog / sprint) chosen by the networked speed. Every remote player
+-- wears YOUR look for now; appearance sync is milestone M5.
+local PUPPET_CLASS = "/Script/Phoenix.PHX_Biped_Preview_Actor"
+local CLIP_PATHS = {
+  idle = "/Game/Animation/Human/Hu_BM_Idle_Casual_Loop_anm.Hu_BM_Idle_Casual_Loop_anm",
+  walk = "/Game/Animation/Human/Hu_BM_Walk_Loop_Fwd_anm.Hu_BM_Walk_Loop_Fwd_anm",
+  run = "/Game/Animation/Human/Hu_BM_Jog_Loop_Fwd_anm.Hu_BM_Jog_Loop_Fwd_anm",
+  sprint = "/Game/Animation/Human/Hu_BM_Sprint_Loop_Fwd_anm.Hu_BM_Sprint_Loop_Fwd_anm",
+}
+local NOMINAL = { idle = 1, walk = 160, run = 420, sprint = 650 }
+local clips = nil
 local statics = nil
-local skelCompClass = nil
 
-local function spawnPuppet(x, y, z)
+local function loadClips()
+  if clips then return clips end
+  local c, n = {}, 0
+  for state, path in pairs(CLIP_PATHS) do
+    local seq = StaticFindObject(path)
+    if valid(seq) then c[state] = seq; n = n + 1 end
+  end
+  c.run = c.run or c.walk; c.sprint = c.sprint or c.run; c.walk = c.walk or c.run
+  log("puppet clips loaded: %d of 4", n)
+  clips = c
+  return clips
+end
+
+local function spawnPuppet(x, y, z, yaw)
   local pawn = getPlayerPawn()
   if not pawn then return nil end
   statics = statics or StaticFindObject("/Script/Engine.Default__GameplayStatics")
-  skelCompClass = skelCompClass or StaticFindObject("/Script/Engine.SkeletalMeshComponent")
   local cls = StaticFindObject(PUPPET_CLASS)
-  local xf = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = { X = x, Y = y, Z = z },
-               Scale3D = { X = 1, Y = 1, Z = 1 } }
+  local half = math.rad(yaw or 0) / 2
+  local xf = { Rotation = { X = 0, Y = 0, Z = math.sin(half), W = math.cos(half) },
+               Translation = { X = x, Y = y, Z = z }, Scale3D = { X = 1, Y = 1, Z = 1 } }
   local a = statics:BeginDeferredActorSpawnFromClass(pawn:GetWorld(), cls, xf, 1, nil)
   if not valid(a) then return nil end
   statics:FinishSpawningActor(a, xf)
-  local comps = pawn:K2_GetComponentsByClass(skelCompClass)
-  if #comps > 0 then
-    local main = comps[1]:get()
-    a.SkeletalMeshComponent:SetSkeletalMesh(main.SkeletalMesh, true)
-    local anim = main:GetAnimInstance()
-    if valid(anim) then a.SkeletalMeshComponent:SetAnimInstanceClass(anim:GetClass()) end
-  end
+  pcall(function()
+    a.Customization:SetCharacterID(pawn.Customization.CharacterName)
+    a.Customization:ReloadCharacter()
+  end)
+  pcall(function() a:SetActorEnableCollision(false) end)
   return a
+end
+
+-- Once the look has loaded: same mesh offset as the player, always tick, play clips directly.
+local function preparePuppet(r)
+  local mesh = r.actor.Mesh
+  if not valid(mesh.SkeletalMesh) then return false end
+  local pawn = getPlayerPawn()
+  pcall(function()
+    local rl, rr = pawn.Mesh.RelativeLocation, pawn.Mesh.RelativeRotation
+    mesh:K2_SetRelativeLocationAndRotation({ X = rl.X, Y = rl.Y, Z = rl.Z },
+                                           { Pitch = rr.Pitch, Yaw = rr.Yaw, Roll = rr.Roll }, false, {}, true)
+  end)
+  pcall(function() mesh.VisibilityBasedAnimTickOption = 0; mesh:SetComponentTickEnabled(true) end)
+  mesh:SetAnimationMode(1)  -- AnimationSingleNode
+  loadClips()
+  r.clip = nil
+  return true
+end
+
+local function animatePuppet(r, speed)
+  local state = "idle"
+  if speed > 20 then state = "walk" end
+  if speed > 260 then state = "run" end
+  if speed > 560 then state = "sprint" end
+  local mesh = r.actor.Mesh
+  if state ~= r.clip and clips[state] then
+    mesh:PlayAnimation(clips[state], true)
+    r.clip = state
+  end
+  if r.clip ~= "idle" then mesh:SetPlayRate(math.max(0.6, math.min(1.6, speed / NOMINAL[r.clip]))) end
 end
 
 -- ------------------------------------------------------------------ remote players
@@ -91,17 +141,17 @@ local function handleEvents(now)
   for i = 1, #events do
     local e = events[i]
     if e.type == "state" then
-      if e.id ~= myId then
+      if e.id ~= myId or cfg.echoSelf then
         local r = remote(e.id)
         local last = r.buf[#r.buf]
         if not last or e.tick > last.tick then
           table.insert(r.buf, { t = now, tick = e.tick, x = e.x, y = e.y, z = e.z, yaw = e.yaw,
                                 speed = e.speed, flags = e.flags })
-          if #r.buf > 30 then table.remove(r.buf, 1) end
+          if #r.buf > 120 then table.remove(r.buf, 1) end
         end
       end
     elseif e.type == "welcome" then
-      myId = e.id; log("connected as #%d", myId)
+      myId = e.id; log("connected as #%d%s", myId, cfg.echoSelf and " (echo test: your own state comes back as a puppet)" or "")
     elseif e.type == "joined" then
       remote(e.id).name = e.name; log("%s joined", e.name)
     elseif e.type == "left" then
@@ -118,14 +168,20 @@ local function handleEvents(now)
 end
 
 local function renderRemotes(now)
-  local renderT = now - cfg.interpDelay
   for id, r in pairs(remotes) do
     local buf = r.buf
     if #buf > 0 then
-      if not valid(r.actor) then r.actor = spawnPuppet(buf[#buf].x, buf[#buf].y, buf[#buf].z) end
+      local renderT = now - cfg.interpDelay - ((id == myId) and (cfg.echoDelay or 1.5) or 0)
+      if not valid(r.actor) then
+        r.actor = spawnPuppet(buf[#buf].x, buf[#buf].y, buf[#buf].z, buf[#buf].yaw)
+        r.ready = false
+        if valid(r.actor) then log("puppet spawned for %s", r.name) end
+      end
       if valid(r.actor) then
-        -- find the two samples around renderT; hold the newest if we run out (no extrapolation yet)
-        local a, b = buf[1], buf[#buf]
+        if not r.ready then r.ready = preparePuppet(r) end
+        -- find the two samples around renderT; hold the oldest/newest if we run out (no extrapolation yet)
+        local a, b = buf[1], buf[1]
+        if renderT >= buf[#buf].t then a, b = buf[#buf], buf[#buf] end
         for k = 1, #buf - 1 do
           if buf[k].t <= renderT and buf[k + 1].t >= renderT then a, b = buf[k], buf[k + 1]; break end
         end
@@ -135,10 +191,8 @@ local function renderRemotes(now)
         local y = a.y + (b.y - a.y) * t
         local z = a.z + (b.z - a.z) * t
         local yaw = lerpAngle(a.yaw, b.yaw, t)
-        r.actor:K2_SetActorLocationAndRotation({ X = x, Y = y, Z = z }, { Pitch = 0, Yaw = yaw, Roll = 0 },
-                                               false, {}, true)
-        -- TODO M3: push b.speed / b.flags into the puppet's AnimInstance variables once the
-        -- AnimBP's locomotion variables are known (UE4SS Live View on the player's AnimInstance).
+        r.actor:K2_TeleportTo({ X = x, Y = y, Z = z }, { Pitch = 0, Yaw = yaw, Roll = 0 })
+        if r.ready then animatePuppet(r, a.speed + (b.speed - a.speed) * t) end
       end
     end
   end
