@@ -189,6 +189,13 @@ local function buildNpcGhost(pawn)
     if not valid(a.Controller) then a:SpawnDefaultController() end
     log("  controller: %s (brain left running)", valid(a.Controller) and className(a.Controller) or "<none>")
   end)
+  -- Round 15: a fresh spawn may be throttled by the game's significance/LOD budget, which would
+  -- freeze its movement while its idle animation still plays. Re-register and force ticking on.
+  local function step(name, fn) local ok, err = pcall(fn); log("  %s: %s", name, ok and "ok" or tostring(err)) end
+  step("ReRegisterWithSignificanceManager", function() a:ReRegisterWithSignificanceManager() end)
+  step("actor tick on", function() a:SetActorTickEnabled(true) end)
+  step("movement tick on", function() a.CharacterMovement:SetComponentTickEnabled(true) end)
+  step("mesh tick on", function() a.Mesh:SetComponentTickEnabled(true); a.Mesh.VisibilityBasedAnimTickOption = 0 end)
   pcall(function() log("  NPC component: %s", valid(a.NPCComponent) and className(a.NPCComponent) or "<none>") end)
   copyLook(pawn, a)
   ghostDrive = "npc"
@@ -466,9 +473,36 @@ local function driveGhostNpc(now, h)
   pcall(function() table.insert(diag, "pathStatus=" .. tostring(ghost.Controller:GetMoveStatus())) end)
   pcall(function() table.insert(diag, "moveDone=" .. tostring(npc:IsMoveDone())) end)
   pcall(function() table.insert(diag, "moveResult=" .. tostring(npc:GetMoveToLocationResult())) end)
-  pcall(function() table.insert(diag, "aiState=" .. tostring(npc.CurrentState)) end)
   pcall(function() table.insert(diag, "maxWalk=" .. tostring(ghost.CharacterMovement.MaxWalkSpeed)) end)
   pcall(function() table.insert(diag, "moveMode=" .. tostring(ghost.CharacterMovement.MovementMode)) end)
+  pcall(function() table.insert(diag, "actorTick=" .. tostring(ghost:IsActorTickEnabled())) end)
+  pcall(function() table.insert(diag, "moveTick=" .. tostring(ghost.CharacterMovement:IsComponentTickEnabled())) end)
+  pcall(function() table.insert(diag, "dilation=" .. tostring(ghost.CustomTimeDilation)) end)
+  pcall(function()
+    local cv = ghost.CharacterMovement.Velocity
+    table.insert(diag, string.format("moveVel=%.0f", math.sqrt(cv.X * cv.X + cv.Y * cv.Y)))
+  end)
+  -- A real student nearby, for comparison: does the game's own student move, and how?
+  pcall(function()
+    local best, bestSpeed = nil, 0
+    for _, st in ipairs(FindAllOf("BP_Student_C") or {}) do
+      if valid(st) and st:GetAddress() ~= ghost:GetAddress() then
+        local v = st:GetVelocity()
+        local sp = math.sqrt(v.X * v.X + v.Y * v.Y)
+        if not best or sp > bestSpeed then best, bestSpeed = st, sp end
+      end
+    end
+    if best then
+      local d = {}
+      pcall(function() table.insert(d, "pathStatus=" .. tostring(best.Controller:GetMoveStatus())) end)
+      pcall(function() table.insert(d, "actorTick=" .. tostring(best:IsActorTickEnabled())) end)
+      pcall(function() table.insert(d, "moveTick=" .. tostring(best.CharacterMovement:IsComponentTickEnabled())) end)
+      pcall(function() table.insert(d, "dilation=" .. tostring(best.CustomTimeDilation)) end)
+      pcall(function() table.insert(d, "maxWalk=" .. tostring(best.CharacterMovement.MaxWalkSpeed)) end)
+      pcall(function() table.insert(d, "moveMode=" .. tostring(best.CharacterMovement.MovementMode)) end)
+      table.insert(diag, string.format("\n    real student: speed %.0f %s", bestSpeed, table.concat(d, " ")))
+    end
+  end)
   return string.format("npc orders [%s], %.0f cm away, ghost speed %.0f (yours %.0f)\n    %s",
     table.concat(tried, ", "), dist, gs, h.speed, table.concat(diag, " "))
 end
@@ -634,4 +668,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 14: F4 = NPC-locomotion ghost, brain running]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 15: F4 = NPC ghost, ticking forced + real-student comparison]")
