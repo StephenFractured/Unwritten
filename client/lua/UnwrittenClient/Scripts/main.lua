@@ -1,6 +1,6 @@
 -- UnwrittenClient: Phase 0 steps 3-4. Two (or more) players see each other.
 -- Needs the native half (dlls/main.dll in this same mod folder) for UW_* functions.
---   F8  connect to the server in config.lua / disconnect
+--   F3  connect to the server in config.lua / disconnect
 -- Each remote player is a puppet actor moved by interpolated server snapshots.
 
 local cfg = require("config")
@@ -158,7 +158,7 @@ local function startLoop()
   end)
 end
 
-RegisterKeyBind(Key.F8, function()
+RegisterKeyBind(Key.F3, function()
   if connected then
     UW_Disconnect(); connected = false
     ExecuteInGameThread(function() for id in pairs(remotes) do removeRemote(id) end end)
@@ -171,4 +171,4 @@ RegisterKeyBind(Key.F8, function()
   end
 end)
 
-log("UnwrittenClient loaded. F8 = connect to %s:%d", cfg.server, cfg.port)
+log("UnwrittenClient loaded. F3 = connect to %s:%d", cfg.server, cfg.port)

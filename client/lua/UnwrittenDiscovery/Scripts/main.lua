@@ -173,6 +173,24 @@ local function buildStudentGhost(pawn)
   return a
 end
 
+-- Round 13: a student that keeps its AI controller and walks through the game's own NPC
+-- locomotion (NPC_Component:MoveTo, the same path the game uses to walk NPCs to a spot).
+-- Its behaviour tree is stopped so it only goes where we send it.
+local function buildNpcGhost(pawn)
+  local student = FindFirstOf("BP_Student_C")
+  if not valid(student) then log("no student loaded nearby - go somewhere with students"); return nil end
+  local l = pawn:K2_GetActorLocation()
+  local a = spawnActorOfClass(pawn:GetWorld(), student:GetClass(), l, pawn:K2_GetActorRotation().Yaw)
+  if not a then log("npc ghost spawn failed"); return nil end
+  log("npc ghost spawned: %s", a:GetFullName())
+  prepareBody(a)
+  takeControl(a)
+  pcall(function() log("  NPC component: %s", valid(a.NPCComponent) and className(a.NPCComponent) or "<none>") end)
+  copyLook(pawn, a)
+  ghostDrive = "npc"
+  return a
+end
+
 local pendingAnimFix = 0  -- countdown of animation-fix retries for a new preview ghost
 
 -- Puppet v2: the game's own character-preview actor. It shares Biped_Character with the
@@ -414,7 +432,38 @@ local function driveGhostPuppet(h)
                        animWriteError and ("\n    write error: " .. animWriteError) or "")
 end
 
+local npcLastOrder = 0
+local function driveGhostNpc(now, h)
+  local g = ghost:K2_GetActorLocation()
+  local dx, dy, dz = h.x - g.X, h.y - g.Y, h.z - g.Z
+  local dist = math.sqrt(dx * dx + dy * dy)
+  if dist > 1500 or math.abs(dz) > 600 then
+    ghost:K2_SetActorLocationAndRotation({ X = h.x, Y = h.y, Z = h.z }, { Pitch = 0, Yaw = h.yaw, Roll = 0 }, false, {}, true)
+    return string.format("snap (was %.0f cm away)", dist)
+  end
+  local v = ghost:GetVelocity()
+  local gs = math.sqrt(v.X * v.X + v.Y * v.Y)
+  if now - npcLastOrder < 0.25 then return string.format("npc walk, %.0f cm away, ghost speed %.0f", dist, gs) end
+  if dist < 80 then return string.format("npc idle, %.0f cm away, ghost speed %.0f", dist, gs) end
+  npcLastOrder = now
+  local npc = ghost.NPCComponent
+  local how = "MoveTo"
+  local ok, err = pcall(function()
+    npc:MoveTo({ X = h.x, Y = h.y, Z = h.z }, 50.0, false, true, true, false, nil, true)
+  end)
+  if not ok then
+    how = "InitMoveToLocation (MoveTo failed: " .. tostring(err) .. ")"
+    ok, err = pcall(function()
+      npc:InitMoveToLocation({ X = h.x, Y = h.y, Z = h.z }, 3.0, h.speed > 350 and 5 or 1, true)
+    end)
+  end
+  if not ok then return "npc move failed: " .. tostring(err) end
+  local anim = readAnimInputs(ghost)
+  return string.format("npc order via %s, %.0f cm away, ghost speed %.0f (yours %.0f)\n    copy anim: %s", how, dist, gs, h.speed, animStr(anim))
+end
+
 local function driveGhost(now, h)
+  if ghostDrive == "npc" then return driveGhostNpc(now, h) end
   if ghostDrive == "anim" then return driveGhostAnim(h) end
   if ghostDrive == "puppet" then return driveGhostPuppet(h) end
   if ghostDrive == "speed" then return driveGhostSpeed(h) end
@@ -479,6 +528,8 @@ end
 -- F6: round 6 - a student NPC body (it has the game's NPC walking animations) wearing your look.
 RegisterKeyBind(Key.F6, function() toggleGhost(buildStudentGhost) end)
 RegisterKeyBind(Key.F9, function() toggleGhost(buildPreviewGhost) end)
+-- F4: round 13 - student walked by the game's own NPC locomotion (NPC_Component:MoveTo).
+RegisterKeyBind(Key.F4, function() toggleGhost(buildNpcGhost) end)
 
 -- ------------------------------------------------------------------ F8: appearance
 RegisterKeyBind(Key.F8, function()
@@ -572,4 +623,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 12b]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 13: F4 = NPC-locomotion ghost]")

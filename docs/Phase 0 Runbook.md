@@ -33,15 +33,73 @@ If the game crashes on start or the log says it could not find objects, send `UE
 
 **Send back:** `UE4SS.log`, and a short clip or screenshot of the ghost. Tell me if it moved, if it turned, and if it animated or slid along in a T-pose. Any of those is a useful answer.
 
-## Step 3 (M4): two players, later
+## Step 3 (M3): build the C++ mod and connect the game to our server
 
-After Step 2 I'll update the client with the real class names and the best puppet strategy. You will then need:
+This builds `UnwrittenClient`, our native mod. It has two halves in one mod folder: `dlls\main.dll` (C++, owns the network connection) and `Scripts\main.lua` (moves characters in game). The first milestone is simple: the game connects to `unwritten-server`. After that, all ghost and animation work moves into C++.
 
-- **Visual Studio 2022** with "Desktop development with C++".
-- Your GitHub account linked to an Epic Games account (UE4SS's source build needs Epic's Unreal headers repo, which is free but gated by that link: https://www.unrealengine.com/en-US/ue-on-github).
-- A friend who owns the game, or a second PC.
+The C++ mod must be compiled together with the UE4SS source, at the **same version you installed (v3.0.1)**.
 
-I'll write the exact build commands then. The server you run with `unwritten-server --port 30120`; the friend sets your IP in `config.lua` and presses F8.
+### 3a. Accounts, once (about 10 minutes, then a wait for an email)
+
+1. Link your GitHub account to an Epic Games account: https://www.unrealengine.com/en-US/ue-on-github (sign in to Epic, open Apps and Accounts, connect GitHub).
+2. Epic sends an email inviting you to the **EpicGames** organization on GitHub. Accept it. You can also accept at https://github.com/EpicGames.
+3. Check: https://github.com/EpicGames/UnrealEngine should open (a 404 page means the invite isn't accepted yet).
+
+UE4SS needs this because one of its parts mirrors Unreal Engine headers, which Epic only shows to linked accounts.
+
+### 3b. Tools, once
+
+1. **Rust** (UE4SS uses it to find functions in the game): download `rustup-init.exe` from https://rustup.rs and accept the defaults. Close and reopen any terminals afterwards.
+2. **Visual Studio 2022** with "Desktop development with C++" (you have it). Use **Developer PowerShell for VS 2022** for every command below, not plain PowerShell.
+3. Check that all three work:
+   ```
+   git --version
+   cargo --version
+   cmake --version
+   ```
+
+### 3c. Get the code
+
+```
+git config --global url."https://github.com/".insteadOf "git@github.com:"
+cd E:\Unwritten\Unwritten
+git pull
+cd client\cpp
+git clone --branch v3.0.1 https://github.com/UE4SS-RE/RE-UE4SS.git
+cd RE-UE4SS
+git submodule update --init --recursive
+cd ..
+```
+
+The first line makes git use your normal GitHub sign-in instead of SSH keys. If a browser window asks you to sign in to GitHub during the submodule step, sign in with the account you linked to Epic. If that step fails on `deps/first/Unreal`, the Epic invite from 3a isn't active yet.
+
+### 3d. Build (first build takes 10 to 20 minutes)
+
+Still in `E:\Unwritten\Unwritten\client\cpp`:
+
+```
+cmake -S . -B build -G "Visual Studio 17 2022" -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake --build build --config Game__Shipping__Win64 --target UnwrittenClient
+```
+
+When it finishes, the build copies `main.dll` straight into `E:\HogwartsLegacy\Phoenix\Binaries\Win64\ue4ss\Mods\UnwrittenClient\dlls\`. (If your game is somewhere else, add `-DUW_MODS_DIR="<your Win64>\ue4ss\Mods"` to the first command.)
+
+**Send back:** the last 30 lines of output if either command fails.
+
+### 3e. Test the connection
+
+1. Tell me the build worked; I install the Lua half and `enabled.txt` into `Mods\UnwrittenClient`.
+2. Start the server: `E:\Unwritten\Unwritten\build\Release\unwritten-server.exe --port 30120`.
+3. Start the game and load a save. The UE4SS log should show `[Unwritten] native bridge loaded` and `UnwrittenClient loaded. F3 = connect`.
+4. Press **F3**. The game log should say `connected as #1`, and the server window should show 1 player.
+
+**Send back:** "connected" or the UE4SS log.
+
+If the game crashes at start after installing `main.dll`, delete the `UnwrittenClient\dlls` folder to get back to normal, and send me `UE4SS.log`.
+
+## Step 4 (M4): two players, later
+
+A friend who owns the game (or a second PC) installs the same mod. You run `unwritten-server`, and they set your IP in `config.lua` and press F3.
 
 ## Want to watch the server work now?
 

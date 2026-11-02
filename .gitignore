@@ -4,3 +4,5 @@ CXXHeaderDump/
 UE4SS_ObjectDump.txt
 *.log
 luac.out
+client/cpp/RE-UE4SS/
+client/cpp/build/

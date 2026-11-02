@@ -1,4 +1,4 @@
--- Edit these, then press F8 in game to connect.
+-- Edit these, then press F3 in game to connect.
 return {
   server = "127.0.0.1",   -- the PC running unwritten-server (use its LAN or public IP for a friend)
   port = 30120,
