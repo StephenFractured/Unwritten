@@ -37,7 +37,7 @@ If the game crashes on start or the log says it could not find objects, send `UE
 
 This builds `UnwrittenClient`, our native mod. It has two halves in one mod folder: `dlls\main.dll` (C++, owns the network connection) and `Scripts\main.lua` (moves characters in game). The first milestone is simple: the game connects to `unwritten-server`. After that, all ghost and animation work moves into C++.
 
-The C++ mod must be compiled together with the UE4SS source, at the **same version you installed (v3.0.1)**.
+The C++ mod must be compiled together with the UE4SS source, at the **same build you installed**. Your UE4SS log says `v3.0.1 Beta ... Git SHA #1ceefac8`: that is the experimental build from UE4SS's `main` branch at commit `1ceefac8`, not the older `v3.0.1` tag (which no longer compiles with current Visual Studio). We build from exactly that commit.
 
 ### 3a. Accounts, once (about 10 minutes, then a wait for an email)
 
@@ -50,7 +50,7 @@ UE4SS needs this because one of its parts mirrors Unreal Engine headers, which E
 ### 3b. Tools, once
 
 1. **Rust** (UE4SS uses it to find functions in the game): download `rustup-init.exe` from https://rustup.rs and accept the defaults. Close and reopen any terminals afterwards.
-2. **Visual Studio 2026** with "Desktop development with C++", plus the VS 2022 compiler: in Visual Studio Installer, Modify, Individual components, tick **"MSVC v143 - VS 2022 C++ x64/x86 build tools (Latest)"**. UE4SS 3.0.1 is built with that compiler. Use **Developer PowerShell** for every command below, not plain PowerShell. (If you have real VS 2022 instead, use `-G "Visual Studio 17 2022"` and drop `-T v143`.)
+2. **Visual Studio 2026** with "Desktop development with C++", plus the VS 2022 compiler: in Visual Studio Installer, Modify, Individual components, tick **"MSVC v143 - VS 2022 C++ x64/x86 build tools (Latest)"**. UE4SS needs MSVC 14.43 or newer; v143 (14.44) is what we use. Use **Developer PowerShell** for every command below, not plain PowerShell. (If you have real VS 2022 instead, use `-G "Visual Studio 17 2022"` and drop `-T v143`.)
 3. Check that all three work:
    ```
    git --version
@@ -65,13 +65,14 @@ git config --global url."https://github.com/".insteadOf "git@github.com:"
 cd E:\Unwritten\Unwritten
 git pull
 cd client\cpp
-git clone --branch v3.0.1 https://github.com/UE4SS-RE/RE-UE4SS.git
+git clone https://github.com/UE4SS-RE/RE-UE4SS.git
 cd RE-UE4SS
+git checkout 1ceefac8b8c286f0fb3eb62b4aae075ff81df0bd
 git submodule update --init --recursive
 cd ..
 ```
 
-The first line makes git use your normal GitHub sign-in instead of SSH keys. If a browser window asks you to sign in to GitHub during the submodule step, sign in with the account you linked to Epic. If that step fails on `deps/first/Unreal` (or CMake later says `deps/first/Unreal` has no CMakeLists.txt), the Epic invite from 3a isn't active yet; accept it and rerun the submodule command. The extra `Rust_*` options in 3d are needed because UE4SS 3.0.1's Rust finder can't parse current rustup's `(active, default)` output and discards rustup's `.cargo\bin` proxy, so we point it at the real toolchain compiler.
+The first line makes git use your normal GitHub sign-in instead of SSH keys. If a browser window asks you to sign in to GitHub during the submodule step, sign in with the account you linked to Epic. If that step fails on `deps/first/Unreal` (or CMake later says `deps/first/Unreal` has no CMakeLists.txt), the Epic invite from 3a isn't active yet; accept it and rerun the submodule command. The extra `Rust_*` options in 3d are needed because UE4SS's bundled Rust finder can't parse current rustup's `(active, default)` output and discards rustup's `.cargo\bin` proxy, so we point it at the real toolchain compiler.
 
 ### 3d. Build (first build takes 10 to 20 minutes)
 

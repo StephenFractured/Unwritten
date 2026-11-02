@@ -12,8 +12,8 @@
 // All game-object work (spawning puppets, moving them, reading the player) stays in Lua
 // so we can iterate without recompiling. Move hot paths into C++ later if Lua is too slow.
 //
-// Built against RE-UE4SS 3.x. If the UE4SS version you clone differs, the signatures most
-// likely to need a touch are on_lua_start and LuaMadeSimple::Lua::register_function.
+// Built against RE-UE4SS main @ 1ceefac8 (reports itself as "v3.0.1 Beta"), the exact build
+// installed in the game. If you change UE4SS versions, check on_lua_start and register_function.
 
 #include <Mod/CppUserModBase.hpp>
 #include <DynamicOutput/DynamicOutput.hpp>
@@ -232,18 +232,16 @@ class UnwrittenClient : public CppUserModBase {
   }
   ~UnwrittenClient() override { g_net.Disconnect(); }
 
-  // Called when our paired Lua mod (Scripts/main.lua) starts.
+  // Called when our paired Lua mod (Scripts/main.lua) starts. UE4SS (main @ 1ceefac8, the build
+  // installed in the game) passes a single game-thread hook Lua instance.
   auto on_lua_start(LuaMadeSimple::Lua& lua, LuaMadeSimple::Lua& main_lua, LuaMadeSimple::Lua& async_lua,
-                    std::vector<LuaMadeSimple::Lua*>& hook_luas) -> void override {
-    for (LuaMadeSimple::Lua* l : {&lua, &main_lua, &async_lua}) {
+                    LuaMadeSimple::Lua* hook_lua) -> void override {
+    for (LuaMadeSimple::Lua* l : {&lua, &main_lua, &async_lua, hook_lua}) {
+      if (!l) continue;
       l->register_function("UW_Connect", L_Connect);
       l->register_function("UW_SendState", L_SendState);
       l->register_function("UW_Poll", L_Poll);
       l->register_function("UW_Disconnect", L_Disconnect);
-    }
-    for (LuaMadeSimple::Lua* l : hook_luas) {
-      l->register_function("UW_SendState", L_SendState);
-      l->register_function("UW_Poll", L_Poll);
     }
     Output::send<LogLevel::Verbose>(STR("[Unwritten] Lua functions registered\n"));
   }

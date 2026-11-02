@@ -1,6 +1,6 @@
 # UnwrittenClient native half (ENet bridge for the UnwrittenClient Lua mod).
 # Built from client/cpp/CMakeLists.txt next to RE-UE4SS. See docs/Phase 0 Runbook.md, Step 3.
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.22)
 
 set(TARGET UnwrittenClient)
 project(${TARGET})
