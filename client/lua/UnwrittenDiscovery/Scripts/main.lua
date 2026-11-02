@@ -202,6 +202,132 @@ local function buildNpcGhost(pawn)
   return a
 end
 
+-- Round 16: "clip puppet". No AI and no game locomotion at all: the game's own preview body
+-- wearing your look is placed exactly where you were (2 s ago) every frame, and its mesh plays
+-- the game's walk / run / idle animation clips directly, picked by your speed. This is the
+-- classic multiplayer-mod puppet and avoids everything that blocked rounds 6-15.
+local clipState = nil   -- current clip name on the ghost
+local clips = nil       -- { idle = seq, walk = seq, run = seq, sprint = seq }
+local clipSetupTries = 0
+
+local function buildClipGhost(pawn)
+  local l = pawn:K2_GetActorLocation()
+  local a = spawnActor(pawn:GetWorld(), "/Script/Phoenix.PHX_Biped_Preview_Actor", l, pawn:K2_GetActorRotation().Yaw)
+  if not a then log("clip ghost spawn failed"); return nil end
+  log("clip ghost spawned: %s", a:GetFullName())
+  local ok, err = pcall(function()
+    a.Customization:SetCharacterID(pawn.Customization.CharacterName)
+    a.Customization:ReloadCharacter()
+  end)
+  log("  copy your look: %s", ok and "requested" or tostring(err))
+  pcall(function() a:SetActorEnableCollision(false) end)  -- a puppet should not push anything
+  clipState, clipSetupTries = nil, 0
+  ghostDrive = "clip"
+  return a
+end
+
+-- Find looping locomotion clips that fit the ghost's skeleton, by name.
+local function findClips(mesh)
+  local skel = mesh.SkeletalMesh.Skeleton
+  local skelAddr = valid(skel) and skel:GetAddress() or nil
+  local want = {
+    idle = { "idle" }, walk = { "walk" }, run = { "jog", "run" }, sprint = { "sprint" },
+  }
+  local avoid = { "start", "stop", "turn", "pivot", "_to_", "trans", "additive", "add_", "face", "lean", "cine", "react" }
+  local found, total, fitting = {}, 0, 0
+  for _, seq in ipairs(FindAllOf("AnimSequence") or {}) do
+    total = total + 1
+    local okSeq, name = pcall(function() return seq:GetFName():ToString() end)
+    if okSeq and name then
+      local fits = true
+      if skelAddr then
+        fits = false
+        pcall(function() fits = seq.Skeleton:GetAddress() == skelAddr end)
+      end
+      if fits then
+        fitting = fitting + 1
+        local lname = name:lower()
+        local bad = false
+        for _, w in ipairs(avoid) do if lname:find(w, 1, true) then bad = true; break end end
+        if not bad then
+          for state, keys in pairs(want) do
+            for _, k in ipairs(keys) do
+              if lname:find(k, 1, true) then
+                found[state] = found[state] or {}
+                table.insert(found[state], { seq = seq, name = name, loop = lname:find("loop", 1, true) ~= nil,
+                                             fwd = lname:find("fwd", 1, true) ~= nil or lname:find("forward", 1, true) ~= nil })
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  log("  clips: %d loaded, %d fit the body's skeleton", total, fitting)
+  local chosen = {}
+  for _, state in ipairs({ "idle", "walk", "run", "sprint" }) do
+    local list = found[state] or {}
+    table.sort(list, function(x, y)
+      local sx = (x.loop and 2 or 0) + (x.fwd and 1 or 0)
+      local sy = (y.loop and 2 or 0) + (y.fwd and 1 or 0)
+      if sx ~= sy then return sx > sy end
+      return #x.name < #y.name
+    end)
+    local names = {}
+    for i = 1, math.min(5, #list) do table.insert(names, list[i].name) end
+    log("  %-6s %d candidates: %s", state, #list, table.concat(names, ", "))
+    if list[1] then chosen[state] = list[1].seq end
+  end
+  chosen.run = chosen.run or chosen.walk
+  chosen.sprint = chosen.sprint or chosen.run
+  chosen.walk = chosen.walk or chosen.run
+  return chosen
+end
+
+local function setupClipGhost(pawn)
+  local mesh = ghost.Mesh
+  if not valid(mesh.SkeletalMesh) then return false end  -- look still loading
+  pcall(function()
+    local rl, rr = pawn.Mesh.RelativeLocation, pawn.Mesh.RelativeRotation
+    mesh:K2_SetRelativeLocationAndRotation({ X = rl.X, Y = rl.Y, Z = rl.Z },
+                                           { Pitch = rr.Pitch, Yaw = rr.Yaw, Roll = rr.Roll }, false, {}, true)
+  end)
+  pcall(function() mesh.VisibilityBasedAnimTickOption = 0; mesh:SetComponentTickEnabled(true) end)
+  clips = findClips(mesh)
+  local ok, err = pcall(function() mesh:SetAnimationMode(1) end)  -- AnimationSingleNode: play clips directly
+  log("  single-clip mode: %s", ok and "on" or tostring(err))
+  return true
+end
+
+local NOMINAL = { idle = 1, walk = 160, run = 420, sprint = 650 }
+
+local function driveGhostClip(now, h)
+  local pawn = getPlayerPawn()
+  if not clips then
+    clipSetupTries = clipSetupTries + 1
+    if not setupClipGhost(pawn) then return string.format("waiting for look to load (%d)", clipSetupTries) end
+  end
+  ghost:K2_SetActorLocationAndRotation({ X = h.x, Y = h.y, Z = h.z }, { Pitch = 0, Yaw = h.yaw, Roll = 0 }, false, {}, true)
+  local state = "idle"
+  if h.speed > 20 then state = "walk" end
+  if h.speed > 260 then state = "run" end
+  if h.speed > 560 then state = "sprint" end
+  local mesh = ghost.Mesh
+  local playErr = nil
+  if state ~= clipState and clips[state] then
+    local ok, err = pcall(function() mesh:PlayAnimation(clips[state], true) end)
+    if ok then clipState = state else playErr = tostring(err) end
+  end
+  if clipState and clipState ~= "idle" then
+    local rate = math.max(0.6, math.min(1.6, h.speed / NOMINAL[clipState]))
+    pcall(function() mesh:SetPlayRate(rate) end)
+  end
+  local clipName = "<none>"
+  pcall(function() clipName = clips[clipState]:GetFName():ToString() end)
+  return string.format("clip puppet: your speed %.0f -> %s (%s)%s", h.speed, tostring(clipState), clipName,
+                       playErr and (" play error: " .. playErr) or "")
+end
+
 local pendingAnimFix = 0  -- countdown of animation-fix retries for a new preview ghost
 
 -- Puppet v2: the game's own character-preview actor. It shares Biped_Character with the
@@ -482,32 +608,12 @@ local function driveGhostNpc(now, h)
     local cv = ghost.CharacterMovement.Velocity
     table.insert(diag, string.format("moveVel=%.0f", math.sqrt(cv.X * cv.X + cv.Y * cv.Y)))
   end)
-  -- A real student nearby, for comparison: does the game's own student move, and how?
-  pcall(function()
-    local best, bestSpeed = nil, 0
-    for _, st in ipairs(FindAllOf("BP_Student_C") or {}) do
-      if valid(st) and st:GetAddress() ~= ghost:GetAddress() then
-        local v = st:GetVelocity()
-        local sp = math.sqrt(v.X * v.X + v.Y * v.Y)
-        if not best or sp > bestSpeed then best, bestSpeed = st, sp end
-      end
-    end
-    if best then
-      local d = {}
-      pcall(function() table.insert(d, "pathStatus=" .. tostring(best.Controller:GetMoveStatus())) end)
-      pcall(function() table.insert(d, "actorTick=" .. tostring(best:IsActorTickEnabled())) end)
-      pcall(function() table.insert(d, "moveTick=" .. tostring(best.CharacterMovement:IsComponentTickEnabled())) end)
-      pcall(function() table.insert(d, "dilation=" .. tostring(best.CustomTimeDilation)) end)
-      pcall(function() table.insert(d, "maxWalk=" .. tostring(best.CharacterMovement.MaxWalkSpeed)) end)
-      pcall(function() table.insert(d, "moveMode=" .. tostring(best.CharacterMovement.MovementMode)) end)
-      table.insert(diag, string.format("\n    real student: speed %.0f %s", bestSpeed, table.concat(d, " ")))
-    end
-  end)
   return string.format("npc orders [%s], %.0f cm away, ghost speed %.0f (yours %.0f)\n    %s",
     table.concat(tried, ", "), dist, gs, h.speed, table.concat(diag, " "))
 end
 
 local function driveGhost(now, h)
+  if ghostDrive == "clip" then return driveGhostClip(now, h) end
   if ghostDrive == "npc" then return driveGhostNpc(now, h) end
   if ghostDrive == "anim" then return driveGhostAnim(h) end
   if ghostDrive == "puppet" then return driveGhostPuppet(h) end
@@ -575,6 +681,8 @@ RegisterKeyBind(Key.F6, function() toggleGhost(buildStudentGhost) end)
 RegisterKeyBind(Key.F9, function() toggleGhost(buildPreviewGhost) end)
 -- F4: round 13 - student walked by the game's own NPC locomotion (NPC_Component:MoveTo).
 RegisterKeyBind(Key.F4, function() toggleGhost(buildNpcGhost) end)
+-- F2: round 16 - clip puppet (preview body placed every frame, plays walk/run/idle clips).
+RegisterKeyBind(Key.F2, function() toggleGhost(buildClipGhost) end)
 
 -- ------------------------------------------------------------------ F8: appearance
 RegisterKeyBind(Key.F8, function()
@@ -668,4 +776,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 15: F4 = NPC ghost, ticking forced + real-student comparison]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 16: F2 = clip puppet]")
