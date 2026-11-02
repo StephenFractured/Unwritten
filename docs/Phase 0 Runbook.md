@@ -50,7 +50,7 @@ UE4SS needs this because one of its parts mirrors Unreal Engine headers, which E
 ### 3b. Tools, once
 
 1. **Rust** (UE4SS uses it to find functions in the game): download `rustup-init.exe` from https://rustup.rs and accept the defaults. Close and reopen any terminals afterwards.
-2. **Visual Studio 2022** with "Desktop development with C++" (you have it). Use **Developer PowerShell for VS 2022** for every command below, not plain PowerShell.
+2. **Visual Studio 2026** with "Desktop development with C++", plus the VS 2022 compiler: in Visual Studio Installer, Modify, Individual components, tick **"MSVC v143 - VS 2022 C++ x64/x86 build tools (Latest)"**. UE4SS 3.0.1 is built with that compiler. Use **Developer PowerShell** for every command below, not plain PowerShell. (If you have real VS 2022 instead, use `-G "Visual Studio 17 2022"` and drop `-T v143`.)
 3. Check that all three work:
    ```
    git --version
@@ -78,7 +78,7 @@ The first line makes git use your normal GitHub sign-in instead of SSH keys. If 
 Still in `E:\Unwritten\Unwritten\client\cpp`:
 
 ```
-cmake -S . -B build -G "Visual Studio 17 2022" -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+cmake -S . -B build -G "Visual Studio 18 2026" -T v143 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 cmake --build build --config Game__Shipping__Win64 --target UnwrittenClient
 ```
 
