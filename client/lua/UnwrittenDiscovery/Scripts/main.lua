@@ -291,14 +291,25 @@ local PREFERRED = {
   run = "Hu_BM_Jog_Loop_Fwd_anm", sprint = "Hu_BM_Sprint_Loop_Fwd_anm",
 }
 local function findPreferredClips()
-  local chosen, missing = {}, 0
-  for state, name in pairs(PREFERRED) do
-    local seq = nil
-    pcall(function() seq = FindObject("AnimSequence", nil, name, false) end)
-    if valid(seq) then chosen[state] = seq; log("  %-6s %s", state, name)
-    else missing = missing + 1; log("  %-6s %s NOT FOUND", state, name) end
+  -- Round 18: FindObject by short name found nothing (round 17), and the full skeleton-checking
+  -- scan was heavy. Light scan: compare names only, stop as soon as all four are found, and log
+  -- each clip's full path so later rounds can load them directly with StaticFindObject.
+  local want = {}
+  for state, name in pairs(PREFERRED) do want[name] = state end
+  local chosen, left, seen = {}, 4, 0
+  for _, seq in ipairs(FindAllOf("AnimSequence") or {}) do
+    seen = seen + 1
+    local ok, name = pcall(function() return seq:GetFName():ToString() end)
+    local state = ok and want[name]
+    if state and not chosen[state] then
+      chosen[state] = seq
+      left = left - 1
+      log("  %-6s %s", state, seq:GetFullName())
+      if left == 0 then break end
+    end
   end
-  return chosen, missing
+  log("  looked at %d clips, %d of 4 found", seen, 4 - left)
+  return chosen, left
 end
 
 local function setupClipGhost(pawn)
@@ -310,14 +321,11 @@ local function setupClipGhost(pawn)
                                            { Pitch = rr.Pitch, Yaw = rr.Yaw, Roll = rr.Roll }, false, {}, true)
   end)
   pcall(function() mesh.VisibilityBasedAnimTickOption = 0; mesh:SetComponentTickEnabled(true) end)
-  local missing
-  clips, missing = findPreferredClips()
-  if missing > 0 then
-    log("  falling back to a one-time scan for the missing clips")
-    local scanned = findClips(mesh)
-    for k, v in pairs(scanned) do clips[k] = clips[k] or v end
-    collectgarbage()
-  end
+  clips = findPreferredClips()
+  clips.run = clips.run or clips.walk
+  clips.sprint = clips.sprint or clips.run
+  clips.walk = clips.walk or clips.run
+  collectgarbage()
   local ok, err = pcall(function() mesh:SetAnimationMode(1) end)  -- AnimationSingleNode: play clips directly
   log("  single-clip mode: %s", ok and "on" or tostring(err))
   return true
@@ -803,4 +811,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 17: F2 = clip puppet, named clips + TeleportTo]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 18: F2 = clip puppet, light clip search + TeleportTo]")
