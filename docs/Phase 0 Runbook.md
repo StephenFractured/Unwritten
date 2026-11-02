@@ -71,14 +71,15 @@ git submodule update --init --recursive
 cd ..
 ```
 
-The first line makes git use your normal GitHub sign-in instead of SSH keys. If a browser window asks you to sign in to GitHub during the submodule step, sign in with the account you linked to Epic. If that step fails on `deps/first/Unreal` (or CMake later says `deps/first/Unreal` has no CMakeLists.txt), the Epic invite from 3a isn't active yet; accept it and rerun the submodule command. The extra `Rust_*` options in 3d are needed because UE4SS 3.0.1's Rust finder can't read the output of current rustup.
+The first line makes git use your normal GitHub sign-in instead of SSH keys. If a browser window asks you to sign in to GitHub during the submodule step, sign in with the account you linked to Epic. If that step fails on `deps/first/Unreal` (or CMake later says `deps/first/Unreal` has no CMakeLists.txt), the Epic invite from 3a isn't active yet; accept it and rerun the submodule command. The extra `Rust_*` options in 3d are needed because UE4SS 3.0.1's Rust finder can't parse current rustup's `(active, default)` output and discards rustup's `.cargo\bin` proxy, so we point it at the real toolchain compiler.
 
 ### 3d. Build (first build takes 10 to 20 minutes)
 
 Still in `E:\Unwritten\Unwritten\client\cpp`:
 
 ```
-cmake -S . -B build -G "Visual Studio 18 2026" -T v143 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DRust_COMPILER=$env:USERPROFILE\.cargo\bin\rustc.exe" "-DRust_CARGO=$env:USERPROFILE\.cargo\bin\cargo.exe" "-DRust_RESOLVE_RUSTUP_TOOLCHAINS=OFF"
+$tc = "$env:USERPROFILE\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin"
+cmake -S . -B build -G "Visual Studio 18 2026" -T v143 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" "-DRust_COMPILER=$tc\rustc.exe" "-DRust_CARGO=$tc\cargo.exe" "-DRust_RESOLVE_RUSTUP_TOOLCHAINS=OFF"
 cmake --build build --config Game__Shipping__Win64 --target UnwrittenClient
 ```
 
