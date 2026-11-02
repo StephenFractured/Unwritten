@@ -290,26 +290,23 @@ local PREFERRED = {
   idle = "Hu_BM_Idle_Casual_Loop_anm", walk = "Hu_BM_Walk_Loop_Fwd_anm",
   run = "Hu_BM_Jog_Loop_Fwd_anm", sprint = "Hu_BM_Sprint_Loop_Fwd_anm",
 }
+-- Round 19: full paths from UE4SS's object dump. Loaded directly: no scanning (scanning all
+-- clips crashed the game in rounds 17 and 18).
+local CLIP_PATHS = {
+  idle = "/Game/Animation/Human/Hu_BM_Idle_Casual_Loop_anm.Hu_BM_Idle_Casual_Loop_anm",
+  walk = "/Game/Animation/Human/Hu_BM_Walk_Loop_Fwd_anm.Hu_BM_Walk_Loop_Fwd_anm",
+  run = "/Game/Animation/Human/Hu_BM_Jog_Loop_Fwd_anm.Hu_BM_Jog_Loop_Fwd_anm",
+  sprint = "/Game/Animation/Human/Hu_BM_Sprint_Loop_Fwd_anm.Hu_BM_Sprint_Loop_Fwd_anm",
+}
 local function findPreferredClips()
-  -- Round 18: FindObject by short name found nothing (round 17), and the full skeleton-checking
-  -- scan was heavy. Light scan: compare names only, stop as soon as all four are found, and log
-  -- each clip's full path so later rounds can load them directly with StaticFindObject.
-  local want = {}
-  for state, name in pairs(PREFERRED) do want[name] = state end
-  local chosen, left, seen = {}, 4, 0
-  for _, seq in ipairs(FindAllOf("AnimSequence") or {}) do
-    seen = seen + 1
-    local ok, name = pcall(function() return seq:GetFName():ToString() end)
-    local state = ok and want[name]
-    if state and not chosen[state] then
-      chosen[state] = seq
-      left = left - 1
-      log("  %-6s %s", state, seq:GetFullName())
-      if left == 0 then break end
-    end
+  local chosen, missing = {}, 0
+  for _, state in ipairs({ "idle", "walk", "run", "sprint" }) do
+    local seq = nil
+    pcall(function() seq = StaticFindObject(CLIP_PATHS[state]) end)
+    if valid(seq) then chosen[state] = seq; log("  %-6s loaded", state)
+    else missing = missing + 1; log("  %-6s NOT LOADED: %s", state, CLIP_PATHS[state]) end
   end
-  log("  looked at %d clips, %d of 4 found", seen, 4 - left)
-  return chosen, left
+  return chosen, missing
 end
 
 local function setupClipGhost(pawn)
@@ -811,4 +808,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 18: F2 = clip puppet, light clip search + TeleportTo]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 19: F2 = clip puppet, clips by path + TeleportTo]")
