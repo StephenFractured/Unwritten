@@ -184,7 +184,11 @@ local function buildNpcGhost(pawn)
   if not a then log("npc ghost spawn failed"); return nil end
   log("npc ghost spawned: %s", a:GetFullName())
   prepareBody(a)
-  takeControl(a)
+  -- Round 14: keep the AI brain running (round 13 stopped it and the body never moved).
+  pcall(function()
+    if not valid(a.Controller) then a:SpawnDefaultController() end
+    log("  controller: %s (brain left running)", valid(a.Controller) and className(a.Controller) or "<none>")
+  end)
   pcall(function() log("  NPC component: %s", valid(a.NPCComponent) and className(a.NPCComponent) or "<none>") end)
   copyLook(pawn, a)
   ghostDrive = "npc"
@@ -447,19 +451,26 @@ local function driveGhostNpc(now, h)
   if dist < 80 then return string.format("npc idle, %.0f cm away, ghost speed %.0f", dist, gs) end
   npcLastOrder = now
   local npc = ghost.NPCComponent
-  local how = "MoveTo"
-  local ok, err = pcall(function()
-    npc:MoveTo({ X = h.x, Y = h.y, Z = h.z }, 50.0, false, true, true, false, nil, true)
-  end)
-  if not ok then
-    how = "InitMoveToLocation (MoveTo failed: " .. tostring(err) .. ")"
-    ok, err = pcall(function()
-      npc:InitMoveToLocation({ X = h.x, Y = h.y, Z = h.z }, 3.0, h.speed > 350 and 5 or 1, true)
-    end)
+  local target = { X = h.x, Y = h.y, Z = h.z }
+  local mobility = h.speed > 350 and 5 or 1  -- ENPC_Mobility RunTo / Default
+  local tried = {}
+  local function try(name, fn)
+    local ok, err = pcall(fn)
+    table.insert(tried, ok and name or (name .. " FAILED: " .. tostring(err)))
   end
-  if not ok then return "npc move failed: " .. tostring(err) end
-  local anim = readAnimInputs(ghost)
-  return string.format("npc order via %s, %.0f cm away, ghost speed %.0f (yours %.0f)\n    copy anim: %s", how, dist, gs, h.speed, animStr(anim))
+  try("SetMoveGoal", function() npc:SetMoveGoal(target, true) end)
+  try("InitMoveToLocation", function() npc:InitMoveToLocation(target, 5.0, mobility, true) end)
+  try("MoveTo", function() npc:MoveTo(target, 50.0, false, true, true, false, nil, true) end)
+  -- Diagnostics: did the AI accept a path, and what state is the NPC in?
+  local diag = {}
+  pcall(function() table.insert(diag, "pathStatus=" .. tostring(ghost.Controller:GetMoveStatus())) end)
+  pcall(function() table.insert(diag, "moveDone=" .. tostring(npc:IsMoveDone())) end)
+  pcall(function() table.insert(diag, "moveResult=" .. tostring(npc:GetMoveToLocationResult())) end)
+  pcall(function() table.insert(diag, "aiState=" .. tostring(npc.CurrentState)) end)
+  pcall(function() table.insert(diag, "maxWalk=" .. tostring(ghost.CharacterMovement.MaxWalkSpeed)) end)
+  pcall(function() table.insert(diag, "moveMode=" .. tostring(ghost.CharacterMovement.MovementMode)) end)
+  return string.format("npc orders [%s], %.0f cm away, ghost speed %.0f (yours %.0f)\n    %s",
+    table.concat(tried, ", "), dist, gs, h.speed, table.concat(diag, " "))
 end
 
 local function driveGhost(now, h)
@@ -623,4 +634,4 @@ RegisterKeyBind(Key.F7, function()
   end)
 end)
 
-log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 13: F4 = NPC-locomotion ghost]")
+log("UnwrittenDiscovery loaded. F5 player, F6 ghost (student wearing your look), F7 animation probe, F8 appearance, F9 ghost (preview character) [round 14: F4 = NPC-locomotion ghost, brain running]")

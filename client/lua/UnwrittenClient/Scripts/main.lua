@@ -131,15 +131,31 @@ local function renderRemotes(now)
   end
 end
 
-local function sendOwnState()
+local function sendOwnState(now)
   local p = getPlayerPawn()
   if not p then return end
   local l = p:K2_GetActorLocation()
-  local v = p:GetVelocity()
-  local speed = math.sqrt(v.X * v.X + v.Y * v.Y)
+  local yaw = p:K2_GetActorRotation().Yaw
+  -- Read the movement component's Velocity field (calling GetVelocity() failed on some frames).
+  local speed, vz = 0, 0
+  pcall(function()
+    local v = p.CharacterMovement.Velocity
+    speed, vz = math.sqrt(v.X * v.X + v.Y * v.Y), v.Z
+  end)
   local flags = 0
-  if math.abs(v.Z) > 50 then flags = flags | 1 end  -- kAnimInAir (rough until M3)
-  UW_SendState(l.X, l.Y, l.Z, p:K2_GetActorRotation().Yaw, speed, flags, 0, 0)
+  if math.abs(vz) > 50 then flags = flags | 1 end  -- kAnimInAir (rough)
+  UW_SendState(l.X, l.Y, l.Z, yaw, speed, flags, 0, 0)
+end
+
+-- Wall-clock seconds from the game (os.clock is CPU time, wrong for interpolation).
+local gameStatics = nil
+local function wallNow()
+  local t = nil
+  pcall(function()
+    gameStatics = gameStatics or StaticFindObject("/Script/Engine.Default__GameplayStatics")
+    t = gameStatics:GetRealTimeSeconds(getPlayerPawn())
+  end)
+  return t or os.clock()
 end
 
 local loopStarted = false
@@ -149,10 +165,14 @@ local function startLoop()
   LoopAsync(math.floor(1000 / cfg.sendHz), function()
     ExecuteInGameThread(function()
       if not connected then return end
-      local now = os.clock()
-      handleEvents(now)
-      sendOwnState()
-      renderRemotes(now)
+      local now = wallNow()
+      -- Each step guarded so one bad frame (loading screen, cutscene) never kills the loop.
+      local ok, err = pcall(handleEvents, now)
+      if not ok then log("poll error: %s", tostring(err)) end
+      ok, err = pcall(sendOwnState, now)
+      if not ok then log("send error: %s", tostring(err)) end
+      ok, err = pcall(renderRemotes, now)
+      if not ok then log("render error: %s", tostring(err)) end
     end)
     return false
   end)
