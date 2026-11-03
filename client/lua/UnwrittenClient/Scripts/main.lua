@@ -121,7 +121,7 @@ local connected = false
 
 local function remote(id)
   local r = remotes[id]
-  if not r then r = { name = "player" .. id, buf = {} }; remotes[id] = r end
+  if not r then r = { name = "player" .. math.tointeger(id), buf = {} }; remotes[id] = r end
   return r
 end
 
