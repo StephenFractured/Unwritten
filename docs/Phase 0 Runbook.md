@@ -101,9 +101,9 @@ When it finishes, the build copies `main.dll` straight into `E:\HogwartsLegacy\P
 
 If the game crashes at start after installing `main.dll`, delete the `UnwrittenClient\dlls` folder to get back to normal, and send me `UE4SS.log`.
 
-## Step 4 (M4): two players, later
+## Step 4 (M4): two players, through the launcher (later)
 
-A friend who owns the game (or a second PC) installs the same mod. You run `unwritten-server`, and they set your IP in `config.lua` and press F3.
+Decided 2026-11-09: no manual installs for other players. The first real two-player test happens once the Unwritten launcher exists. Like FiveM or RedM, the launcher checks that the player owns Hogwarts Legacy, downloads the Unwritten client files (UE4SS build, `main.dll`, Lua scripts), installs them next to the game, and connects to our server. Until then, multiplayer is tested on one PC with the server's `--echo 1` mode.
 
 ## Want to watch the server work now?
 
