@@ -32,6 +32,7 @@ struct Player {
   uint16_t id = 0;
   ENetPeer* peer = nullptr;
   std::string name;
+  std::string appearance;  // empty until the client sends its look
   bool hello = false;     // completed handshake
   bool has_state = false; // has sent at least one PlayerState
   uw::PlayerState state;
@@ -175,9 +176,21 @@ class Server {
       for (auto& [oid, o] : players_) {
         if (oid == p.id || !o.hello) continue;
         Send(p, uw::kChanReliable, uw::EncodeJoined(oid, o.name), true);
+        if (!o.appearance.empty())
+          Send(p, uw::kChanReliable, uw::EncodePlayerAppearance(oid, o.appearance), true);
         Send(o, uw::kChanReliable, uw::EncodeJoined(p.id, p.name), true);
       }
       std::printf("+ %s (#%u) joined, %zu online\n", p.name.c_str(), p.id, players_.size());
+      return;
+    }
+    if (type == uw::Msg::Appearance && p.hello) {
+      std::string blob = r.lstr();
+      if (!r.ok() || blob.empty() || blob.size() > uw::kMaxAppearanceBytes) return;
+      p.appearance = std::move(blob);
+      auto pkt = uw::EncodePlayerAppearance(p.id, p.appearance);
+      for (auto& [oid, o] : players_)
+        if (o.hello && (oid != p.id || echo_)) Send(o, uw::kChanReliable, pkt, true);
+      std::printf("  %s (#%u) appearance: %zu bytes\n", p.name.c_str(), p.id, p.appearance.size());
       return;
     }
     if (type == uw::Msg::PlayerState && p.hello) {

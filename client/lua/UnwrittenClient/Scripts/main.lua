@@ -4,6 +4,7 @@
 -- Each remote player is a puppet actor moved by interpolated server snapshots.
 
 local cfg = require("config")
+local appearance = require("appearance")
 local TAG = "[Unwritten] "
 local function log(fmt, ...) print(TAG .. string.format(fmt, ...) .. "\n") end
 local function valid(o) return o ~= nil and o:IsValid() end
@@ -40,7 +41,7 @@ end
 -- Puppet v2, proven in UnwrittenDiscovery round 20: the game's character-preview body wearing a
 -- look, placed every frame with K2_TeleportTo, its mesh playing the game's own human locomotion
 -- clips directly (idle / walk / jog / sprint) chosen by the networked speed. Every remote player
--- wears YOUR look for now; appearance sync is milestone M5.
+-- starts from a base look, then wears the look that player sent (appearance.lua, milestone M5).
 local PUPPET_CLASS = "/Script/Phoenix.PHX_Biped_Preview_Actor"
 local CLIP_PATHS = {
   idle = "/Game/Animation/Human/Hu_BM_Idle_Casual_Loop_anm.Hu_BM_Idle_Casual_Loop_anm",
@@ -65,7 +66,22 @@ local function loadClips()
   return clips
 end
 
-local function spawnPuppet(x, y, z, yaw)
+-- Base look for a new puppet before the synced look goes on top. Normally your own (any complete
+-- body works, every piece gets replaced). In the one-PC echo test we start from a student's look
+-- instead, so if the puppet ends up looking like you, the synced appearance did that, not the base.
+local function baseCharacterId(pawn, isEchoOfMe)
+  if isEchoOfMe and cfg.echoTestBase ~= false then
+    local ok, id = pcall(function()
+      local s = FindFirstOf("BP_Student_C")
+      if valid(s) then return s.CCComponent.CharacterName end
+    end)
+    if ok and id then log("echo test: puppet starts as student look %s", id:ToString()); return id end
+    log("echo test: no student found nearby, puppet starts from your own look")
+  end
+  return pawn.Customization.CharacterName
+end
+
+local function spawnPuppet(x, y, z, yaw, isEchoOfMe)
   local pawn = getPlayerPawn()
   if not pawn then return nil end
   statics = statics or StaticFindObject("/Script/Engine.Default__GameplayStatics")
@@ -77,7 +93,7 @@ local function spawnPuppet(x, y, z, yaw)
   if not valid(a) then return nil end
   statics:FinishSpawningActor(a, xf)
   pcall(function()
-    a.Customization:SetCharacterID(pawn.Customization.CharacterName)
+    a.Customization:SetCharacterID(baseCharacterId(pawn, isEchoOfMe))
     a.Customization:ReloadCharacter()
   end)
   pcall(function() a:SetActorEnableCollision(false) end)
@@ -116,6 +132,7 @@ end
 
 -- ------------------------------------------------------------------ remote players
 local myId = nil
+local sendMyLook  -- defined below handleEvents' helpers
 local remotes = {}  -- id -> { name, actor, buf = { {t, x, y, z, yaw, speed, flags} ... } }
 local connected = false
 
@@ -136,6 +153,17 @@ local function lerpAngle(a, b, t)
   return a + d * t
 end
 
+sendMyLook = function()
+  local pawn = getPlayerPawn()
+  if not pawn then log("look: no player yet, not sent"); return end
+  local blob, st = appearance.capture(pawn.Customization)
+  log("look captured: %d pieces, %d outfit items, %d sliders, %d bytes", st.pieces, st.outfit, st.sliders, #blob)
+  for _, e in ipairs(st.errors) do log("  look capture problem: %s", e) end
+  if cfg.logLook then for line in blob:gmatch("[^\n]+") do log("  look> %s", line) end end
+  if not UW_SetAppearance then log("look: main.dll is older than this script, rebuild it"); return end
+  if not UW_SetAppearance(blob) then log("look: blob empty or too big, not sent") end
+end
+
 local function handleEvents(now)
   local events = UW_Poll()
   for i = 1, #events do
@@ -152,6 +180,11 @@ local function handleEvents(now)
       end
     elseif e.type == "welcome" then
       myId = e.id; log("connected as #%d%s", myId, cfg.echoSelf and " (echo test: your own state comes back as a puppet)" or "")
+      sendMyLook()
+    elseif e.type == "appearance" then
+      local r = remote(e.id)
+      r.look, r.lookApplied = e.data, false
+      log("look received for %s (%d bytes)", r.name, #e.data)
     elseif e.type == "joined" then
       remote(e.id).name = e.name; log("%s joined", e.name)
     elseif e.type == "left" then
@@ -173,12 +206,23 @@ local function renderRemotes(now)
     if #buf > 0 then
       local renderT = now - cfg.interpDelay - ((id == myId) and (cfg.echoDelay or 1.5) or 0)
       if not valid(r.actor) then
-        r.actor = spawnPuppet(buf[#buf].x, buf[#buf].y, buf[#buf].z, buf[#buf].yaw)
-        r.ready = false
+        r.actor = spawnPuppet(buf[#buf].x, buf[#buf].y, buf[#buf].z, buf[#buf].yaw, id == myId)
+        r.ready, r.lookApplied, r.readyAt = false, false, nil
         if valid(r.actor) then log("puppet spawned for %s", r.name) end
       end
       if valid(r.actor) then
         if not r.ready then r.ready = preparePuppet(r) end
+        if r.ready and not r.readyAt then r.readyAt = now end
+        -- Put the synced look on once the base look has fully loaded (else the base load overwrites it).
+        local baseLoading = false
+        pcall(function() baseLoading = r.actor.Customization:IsLoading() end)
+        if r.ready and r.look and not r.lookApplied and not baseLoading and now - r.readyAt > 0.5 then
+          r.lookApplied = true
+          local st = appearance.apply(r.actor.Customization, r.look)
+          log("look applied to %s: %d pieces, %d params, %d sliders, %d failed%s", r.name, st.pieces, st.params,
+              st.sliders, st.failed, st.firstError and (" (first: " .. st.firstError .. ")") or "")
+          r.ready = preparePuppet(r)  -- meshes changed: set the anim mode and clip again
+        end
         -- find the two samples around renderT; hold the oldest/newest if we run out (no extrapolation yet)
         local a, b = buf[1], buf[1]
         if renderT >= buf[#buf].t then a, b = buf[#buf], buf[#buf] end

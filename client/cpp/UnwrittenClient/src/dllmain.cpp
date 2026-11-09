@@ -6,6 +6,7 @@
 //
 //   UW_Connect(host, port, name)                       -> true/false
 //   UW_SendState(x, y, z, yaw, speed, flags, montage, montageSeq)
+//   UW_SetAppearance(blob)                             my look; sent now and on every reconnect
 //   UW_Poll()                                          -> array of event tables
 //   UW_Disconnect()
 //
@@ -35,7 +36,7 @@ using namespace RC;
 namespace {
 
 struct Event {
-  enum Kind { Welcome, Joined, Left, State, Correction, Disconnected } kind;
+  enum Kind { Welcome, Joined, Left, State, Correction, Disconnected, Appearance } kind;
   uint16_t id = 0;
   std::string name;
   uint32_t tick = 0;
@@ -75,6 +76,12 @@ class NetBridge {
     has_pending_ = true;
   }
 
+  void SetAppearance(const std::string& blob) {
+    std::lock_guard lk(out_mu_);
+    appearance_ = blob;
+    appearance_dirty_ = true;
+  }
+
   std::vector<Event> Drain() {
     std::lock_guard lk(in_mu_);
     std::vector<Event> out;
@@ -109,6 +116,16 @@ class NetBridge {
         }
       }
       if (welcomed_) {
+        std::string look;
+        {
+          std::lock_guard lk(out_mu_);
+          if (appearance_dirty_ && !appearance_.empty()) { look = appearance_; appearance_dirty_ = false; }
+        }
+        if (!look.empty()) {
+          auto pkt = uw::EncodeAppearance(look);
+          enet_peer_send(peer_, uw::kChanReliable,
+                         enet_packet_create(pkt.data(), pkt.size(), ENET_PACKET_FLAG_RELIABLE));
+        }
         uw::PlayerState s;
         bool send = false;
         {
@@ -128,7 +145,14 @@ class NetBridge {
   void OnPacket(const uint8_t* d, size_t n) {
     uw::Reader r(d, n);
     switch (uw::Msg(r.u8())) {
-      case uw::Msg::Welcome: { Event e{Event::Welcome}; e.id = r.u16(); welcomed_ = true; Push(e); break; }
+      case uw::Msg::Welcome: {
+        Event e{Event::Welcome}; e.id = r.u16(); welcomed_ = true;
+        { std::lock_guard lk(out_mu_); appearance_dirty_ = true; }  // (re)send our look after every welcome
+        Push(e); break;
+      }
+      case uw::Msg::PlayerAppearance: {
+        Event e{Event::Appearance}; e.id = r.u16(); e.name = r.lstr(); if (r.ok()) Push(e); break;
+      }
       case uw::Msg::PlayerJoined: { Event e{Event::Joined}; e.id = r.u16(); e.name = r.str(); Push(e); break; }
       case uw::Msg::PlayerLeft: { Event e{Event::Left}; e.id = r.u16(); Push(e); break; }
       case uw::Msg::Correction: {
@@ -158,6 +182,8 @@ class NetBridge {
   std::mutex out_mu_, in_mu_;
   uw::PlayerState pending_;
   bool has_pending_ = false;
+  std::string appearance_;
+  bool appearance_dirty_ = false;
   std::vector<Event> inbox_;
 };
 
@@ -189,6 +215,16 @@ int L_SendState(const LuaMadeSimple::Lua& lua) {
   return 0;
 }
 
+int L_SetAppearance(const LuaMadeSimple::Lua& lua) {
+  lua_State* L = lua.get_lua_state();
+  size_t n = 0;
+  const char* blob = luaL_checklstring(L, 1, &n);
+  bool ok = n > 0 && n <= uw::kMaxAppearanceBytes;
+  if (ok) g_net.SetAppearance(std::string(blob, n));
+  lua_pushboolean(L, ok);
+  return 1;
+}
+
 int L_Poll(const LuaMadeSimple::Lua& lua) {
   lua_State* L = lua.get_lua_state();
   auto events = g_net.Drain();
@@ -201,6 +237,10 @@ int L_Poll(const LuaMadeSimple::Lua& lua) {
       case Event::Joined: SetStr(L, "type", "joined"); SetNum(L, "id", ev.id); SetStr(L, "name", ev.name.c_str()); break;
       case Event::Left: SetStr(L, "type", "left"); SetNum(L, "id", ev.id); break;
       case Event::Disconnected: SetStr(L, "type", "disconnected"); break;
+      case Event::Appearance:
+        SetStr(L, "type", "appearance"); SetNum(L, "id", ev.id);
+        lua_pushlstring(L, ev.name.data(), ev.name.size()); lua_setfield(L, -2, "data");
+        break;
       case Event::Correction:
         SetStr(L, "type", "correction"); SetNum(L, "x", ev.pos.x); SetNum(L, "y", ev.pos.y); SetNum(L, "z", ev.pos.z);
         break;
@@ -225,7 +265,7 @@ class UnwrittenClient : public CppUserModBase {
  public:
   UnwrittenClient() : CppUserModBase() {
     ModName = STR("UnwrittenClient");
-    ModVersion = STR("0.0.1");
+    ModVersion = STR("0.0.2");
     ModDescription = STR("Unwritten Roleplay Phase 0 sync client");
     ModAuthors = STR("Unwritten");
     Output::send<LogLevel::Verbose>(STR("[Unwritten] native bridge loaded\n"));
@@ -240,6 +280,7 @@ class UnwrittenClient : public CppUserModBase {
       if (!l) continue;
       l->register_function("UW_Connect", L_Connect);
       l->register_function("UW_SendState", L_SendState);
+      l->register_function("UW_SetAppearance", L_SetAppearance);
       l->register_function("UW_Poll", L_Poll);
       l->register_function("UW_Disconnect", L_Disconnect);
     }

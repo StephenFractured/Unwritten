@@ -9,4 +9,8 @@ return {
   -- server as a puppet trailing you by echoDelay seconds. Set false for real multiplayer.
   echoSelf = true,
   echoDelay = 1.5,
+  -- Echo test only: your trailing puppet starts as a student's look and then receives yours from
+  -- the server, so you can see appearance sync work. Stand near a student when you press F3.
+  echoTestBase = true,
+  logLook = true,          -- write your captured look to UE4SS.log (for debugging appearance sync)
 }

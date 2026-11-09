@@ -14,7 +14,7 @@
 
 namespace uw {
 
-constexpr uint16_t kProtocolVersion = 1;
+constexpr uint16_t kProtocolVersion = 2;  // 2: appearance messages
 constexpr uint16_t kDefaultPort = 30120;
 constexpr int kTickRate = 30;          // server simulation ticks per second
 constexpr int kSnapshotRateNear = 20;  // snapshots/s for players inside the near radius
@@ -23,6 +23,7 @@ constexpr float kNearRadiusCm = 8000.f;   // 80 m
 constexpr float kFarRadiusCm = 30000.f;   // 300 m
 constexpr int kMaxNearEntities = 64;      // hard cap per client per snapshot
 constexpr size_t kMaxPacketBytes = 1200;  // stay under typical MTU, never fragment
+constexpr size_t kMaxAppearanceBytes = 16384;  // appearance blob limit
 constexpr float kMaxSpeedCmPerSec = 3000.f;  // sanity limit (broom flight is faster: raise in Phase 3)
 
 enum Channel : uint8_t { kChanReliable = 0, kChanUnreliable = 1, kChanCount = 2 };
@@ -31,12 +32,14 @@ enum class Msg : uint8_t {
   // client -> server
   Hello = 1,        // reliable: protocol version + display name
   PlayerState = 2,  // unreliable sequenced: where I am and what I'm doing
+  Appearance = 3,   // reliable: my look, as an appearance text blob (see client appearance.lua)
   // server -> client
   Welcome = 10,      // reliable: your player id
   PlayerJoined = 11, // reliable: id + name (+ appearance later)
   PlayerLeft = 12,   // reliable: id
   Snapshot = 13,     // unreliable: batch of other players' states
   Correction = 14,   // reliable: server rejected your position, snap back here
+  PlayerAppearance = 15,  // reliable: id + that player's appearance blob
 };
 
 // Animation is synced as the handful of inputs the player's AnimBlueprint reads,
@@ -97,6 +100,12 @@ class Writer {
     u8(n);
     buf.insert(buf.end(), s.begin(), s.begin() + n);
   }
+  // Long string: u16 length.
+  void lstr(const std::string& s) {
+    uint16_t n = static_cast<uint16_t>(s.size() > 65535 ? 65535 : s.size());
+    u16(n);
+    buf.insert(buf.end(), s.begin(), s.begin() + n);
+  }
   void raw(const void* p, size_t n) {
     auto b = static_cast<const uint8_t*>(p);
     buf.insert(buf.end(), b, b + n);
@@ -115,6 +124,13 @@ class Reader {
   float f32() { float v = 0; raw(&v, 4); return v; }
   std::string str() {
     uint8_t n = u8();
+    if (!ok_ || remaining() < n) { ok_ = false; return {}; }
+    std::string s(reinterpret_cast<const char*>(d_ + p_), n);
+    p_ += n;
+    return s;
+  }
+  std::string lstr() {
+    uint16_t n = u16();
     if (!ok_ || remaining() < n) { ok_ = false; return {}; }
     std::string s(reinterpret_cast<const char*>(d_ + p_), n);
     p_ += n;
@@ -144,6 +160,12 @@ inline std::vector<uint8_t> EncodeJoined(uint16_t id, const std::string& name) {
 }
 inline std::vector<uint8_t> EncodeLeft(uint16_t id) {
   Writer w; w.u8(uint8_t(Msg::PlayerLeft)); w.u16(id); return w.buf;
+}
+inline std::vector<uint8_t> EncodeAppearance(const std::string& blob) {
+  Writer w; w.u8(uint8_t(Msg::Appearance)); w.lstr(blob); return w.buf;
+}
+inline std::vector<uint8_t> EncodePlayerAppearance(uint16_t id, const std::string& blob) {
+  Writer w; w.u8(uint8_t(Msg::PlayerAppearance)); w.u16(id); w.lstr(blob); return w.buf;
 }
 inline std::vector<uint8_t> EncodeCorrection(const Vec3& p) {
   Writer w; w.u8(uint8_t(Msg::Correction)); w.f32(p.x); w.f32(p.y); w.f32(p.z); return w.buf;
